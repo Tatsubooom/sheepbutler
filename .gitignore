@@ -1,0 +1,8 @@
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# 秘密情報（絶対にコミットしない）
+.env
+.secrets/
+/bin/
+.claude/settings.local.json
