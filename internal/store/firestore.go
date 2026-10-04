@@ -158,12 +158,17 @@ func (f *Firestore) ListTriaged(ctx context.Context, limit int) ([]*model.Messag
 }
 
 // SaveTriage は判定結果を保存し、状態を triaged にする。
-func (f *Firestore) SaveTriage(ctx context.Context, id string, ex *llm.Extraction, res model.TriageResult) error {
-	_, err := f.c.Collection(colMessages).Doc(id).Update(ctx, []firestore.Update{
+// queue が true なら段階に応じて通知待ちにする（再計算のときは false にして、昔のメールを再通知しない）。
+func (f *Firestore) SaveTriage(ctx context.Context, id string, ex *llm.Extraction, res model.TriageResult, queue bool) error {
+	ups := []firestore.Update{
 		{Path: "extracted", Value: ex},
 		{Path: "triage", Value: res},
 		{Path: "status", Value: string(model.StatusTriaged)},
-	})
+	}
+	if queue {
+		ups = append(ups, firestore.Update{Path: "notify", Value: string(model.NotifyStateFor(res.Tier))})
+	}
+	_, err := f.c.Collection(colMessages).Doc(id).Update(ctx, ups)
 	return err
 }
 
@@ -232,5 +237,114 @@ func (f *Firestore) AddUsage(ctx context.Context, day string, u llm.Usage) error
 // AddAudit は LLM 呼び出しの記録を残す。expiresAt を過ぎると TTL で自動削除される。
 func (f *Firestore) AddAudit(ctx context.Context, a model.Audit) error {
 	_, _, err := f.c.Collection(colAudit).Add(ctx, a)
+	return err
+}
+
+const (
+	colNotifications = "notifications"
+	docDigest        = "digest"
+)
+
+func (f *Firestore) messagesFrom(docs []*firestore.DocumentSnapshot) ([]*model.Message, error) {
+	out := make([]*model.Message, 0, len(docs))
+	for _, d := range docs {
+		var m model.Message
+		if err := d.DataTo(&m); err != nil {
+			return nil, fmt.Errorf("messages/%s: %w", d.Ref.ID, err)
+		}
+		m.ID = d.Ref.ID
+		out = append(out, &m)
+	}
+	return out, nil
+}
+
+// ListByNotify は通知の状態が state のメールを最大 limit 件返す。
+func (f *Firestore) ListByNotify(ctx context.Context, state model.NotifyState, limit int) ([]*model.Message, error) {
+	docs, err := f.c.Collection(colMessages).Where("notify", "==", string(state)).Limit(limit).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	return f.messagesFrom(docs)
+}
+
+// ListReceivedSince は since 以降に受信したメールを返す。
+// 状態などとの組み合わせは複合インデックスが要るため、受信日時だけで絞ってコード側で選ぶ。
+func (f *Firestore) ListReceivedSince(ctx context.Context, since time.Time) ([]*model.Message, error) {
+	docs, err := f.c.Collection(colMessages).Where("receivedAt", ">=", since).Limit(1000).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	return f.messagesFrom(docs)
+}
+
+// SetNotify はメールの通知の状態を変える。at が0でなければ通知した時刻も記録する。
+func (f *Firestore) SetNotify(ctx context.Context, ids []string, state model.NotifyState, at time.Time) error {
+	for _, id := range ids {
+		ups := []firestore.Update{{Path: "notify", Value: string(state)}}
+		if !at.IsZero() {
+			ups = append(ups, firestore.Update{Path: "notifiedAt", Value: at})
+		}
+		if _, err := f.c.Collection(colMessages).Doc(id).Update(ctx, ups); err != nil {
+			return fmt.Errorf("messages/%s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// AddReminded は送り済みのリマインド（締切の何時間前か）を追加する。
+func (f *Firestore) AddReminded(ctx context.Context, id string, hours []int) error {
+	vals := make([]any, len(hours))
+	for i, h := range hours {
+		vals[i] = h
+	}
+	_, err := f.c.Collection(colMessages).Doc(id).Update(ctx, []firestore.Update{
+		{Path: "reminded", Value: firestore.ArrayUnion(vals...)},
+	})
+	return err
+}
+
+// ListNotificationsSince は since 以降の送信記録を返す（回数の上限の判定に使う）。
+func (f *Firestore) ListNotificationsSince(ctx context.Context, since time.Time) ([]model.Notification, error) {
+	docs, err := f.c.Collection(colNotifications).Where("at", ">=", since).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.Notification, 0, len(docs))
+	for _, d := range docs {
+		var n model.Notification
+		if err := d.DataTo(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+// AddNotification は送信を記録する。expiresAt を過ぎると TTL で自動削除される。
+func (f *Firestore) AddNotification(ctx context.Context, n model.Notification) error {
+	_, _, err := f.c.Collection(colNotifications).Add(ctx, n)
+	return err
+}
+
+// LastDigest は最後に送ったまとめ報告の予定時刻を返す。
+func (f *Firestore) LastDigest(ctx context.Context) (time.Time, error) {
+	snap, err := f.c.Collection(colState).Doc(docDigest).Get(ctx)
+	if status.Code(err) == codes.NotFound {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	v, err := snap.DataAt("lastSlot")
+	if err != nil {
+		return time.Time{}, nil
+	}
+	t, _ := v.(time.Time)
+	return t, nil
+}
+
+// SetLastDigest は送ったまとめ報告の予定時刻を記録する。
+func (f *Firestore) SetLastDigest(ctx context.Context, slot time.Time) error {
+	_, err := f.c.Collection(colState).Doc(docDigest).Set(ctx, map[string]any{"lastSlot": slot, "updatedAt": time.Now()})
 	return err
 }

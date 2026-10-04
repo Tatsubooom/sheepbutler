@@ -17,7 +17,7 @@ const maxAttempts = 3
 // Store は判定に必要な保存先の操作。
 type Store interface {
 	ListPending(ctx context.Context, limit int) ([]*model.Message, error)
-	SaveTriage(ctx context.Context, id string, ex *llm.Extraction, res model.TriageResult) error
+	SaveTriage(ctx context.Context, id string, ex *llm.Extraction, res model.TriageResult, queue bool) error
 	IncrementAttempts(ctx context.Context, id string) (int, error)
 	UsageCost(ctx context.Context, day string) (float64, error)
 	AddUsage(ctx context.Context, day string, u llm.Usage) error
@@ -82,7 +82,7 @@ func (t *Triager) TriageOne(ctx context.Context, m *model.Message) (model.Triage
 
 	if reason, ok := Excluded(t.Config, mail); ok {
 		res := model.TriageResult{Tier: model.TierRecord, Reasons: []string{reason}, Method: model.MethodExcluded, At: now}
-		return res, t.Store.SaveTriage(ctx, m.ID, nil, res)
+		return res, t.Store.SaveTriage(ctx, m.ID, nil, res, true)
 	}
 
 	// 1日の費用上限を超えていたら LLM を使わない。
@@ -125,13 +125,13 @@ func (t *Triager) TriageOne(ctx context.Context, m *model.Message) (model.Triage
 
 	res = Score(t.Config, mail, &ex, now)
 	t.audit(ctx, m.ID, body, usage, res.Tier, nil)
-	return res, t.Store.SaveTriage(ctx, m.ID, &ex, res)
+	return res, t.Store.SaveTriage(ctx, m.ID, &ex, res, true)
 }
 
 func (t *Triager) saveRulesOnly(ctx context.Context, m *model.Message, mail Mail, now time.Time, why string) (model.TriageResult, error) {
 	res := Score(t.Config, mail, nil, now)
 	res.Reasons = append(res.Reasons, why)
-	return res, t.Store.SaveTriage(ctx, m.ID, nil, res)
+	return res, t.Store.SaveTriage(ctx, m.ID, nil, res, true)
 }
 
 func (t *Triager) audit(ctx context.Context, id, body string, u llm.Usage, tier model.Tier, callErr error) {

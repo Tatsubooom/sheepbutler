@@ -6,6 +6,7 @@ import (
 	"errors"
 	"html"
 	"net/http"
+	"net/url"
 	"time"
 
 	"google.golang.org/api/gmail/v1"
@@ -43,6 +44,20 @@ func (g *Gmail) Profile(ctx context.Context) (uint64, error) {
 		return 0, err
 	}
 	return p.HistoryId, nil
+}
+
+// Email は専用 Gmail のアドレスを返す。
+func (g *Gmail) Email(ctx context.Context) (string, error) {
+	p, err := g.svc.Users.GetProfile("me").Context(ctx).Do()
+	if err != nil {
+		return "", err
+	}
+	return p.EmailAddress, nil
+}
+
+// Link はメールを Gmail で開く URL を返す。authuser で専用 Gmail のアカウントを指定する。
+func Link(account, id string) string {
+	return "https://mail.google.com/mail/?authuser=" + url.QueryEscape(account) + "#all/" + id
 }
 
 // History は startID 以降に受信トレイへ追加されたメールの ID と、最新の履歴 ID を返す。

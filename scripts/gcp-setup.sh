@@ -29,10 +29,11 @@ else
   echo "   既に存在するのでスキップ"
 fi
 
-# messages と audit の expiresAt を過ぎたドキュメントを自動削除する（保存期間の上限）。
-echo "== Firestore の TTL ポリシー（messages, audit の expiresAt）"
+# messages・audit・notifications の expiresAt を過ぎたドキュメントを自動削除する（保存期間の上限）。
+echo "== Firestore の TTL ポリシー（messages, audit, notifications の expiresAt）"
 gcloud firestore fields ttls update expiresAt --collection-group=messages --enable-ttl --async >/dev/null
 gcloud firestore fields ttls update expiresAt --collection-group=audit --enable-ttl --async >/dev/null
+gcloud firestore fields ttls update expiresAt --collection-group=notifications --enable-ttl --async >/dev/null
 
 echo "== Pub/Sub トピック $TOPIC（Gmail の新着通知を受け取る）"
 if ! gcloud pubsub topics describe "$TOPIC" >/dev/null 2>&1; then

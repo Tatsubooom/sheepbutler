@@ -118,7 +118,7 @@ func main() {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%.2f\t%.2f\t%s\n", m.ReceivedAt.In(jst).Format("01/02 15:04"), cut(m.Subject, 28),
 			tierLabel(m.Triage.Tier), tierLabel(res.Tier), m.Triage.Score, res.Score, strings.Join(res.Reasons, "・"))
 		if *apply {
-			if err := fs.SaveTriage(ctx, m.ID, m.Extracted, res); err != nil {
+			if err := fs.SaveTriage(ctx, m.ID, m.Extracted, res, false); err != nil {
 				log.Fatal(err)
 			}
 		}

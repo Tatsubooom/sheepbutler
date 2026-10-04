@@ -70,3 +70,24 @@ func TestFindCompany(t *testing.T) {
 		t.Error("空の企業名は見つからない")
 	}
 }
+
+func TestParseClock(t *testing.T) {
+	if m, err := ParseClock("07:30"); err != nil || m != 450 {
+		t.Fatalf("got %d %v", m, err)
+	}
+	for _, bad := range []string{"25:00", "7時", "", "12:60"} {
+		if _, err := ParseClock(bad); err == nil {
+			t.Errorf("ParseClock(%q) はエラーになるべき", bad)
+		}
+	}
+}
+
+func TestValidateNotify(t *testing.T) {
+	c := Default()
+	c.Notify.QuietHours = []string{"00:00"}
+	c.Digest.Times = []string{"7:00", "27:00"}
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "quiet_hours") || !strings.Contains(err.Error(), "27:00") {
+		t.Fatalf("err = %v", err)
+	}
+}

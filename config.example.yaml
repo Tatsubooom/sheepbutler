@@ -36,3 +36,15 @@ llm:
   max_input_chars: 1500    # LLM に送る本文の最大文字数（判定に必要な情報はたいてい冒頭にある）
   daily_budget_usd: 0.5    # 1日の LLM 費用の上限。超えたらルールだけで判定する
   structured_output: false # true で JSON の形式を API 側で保証する（1通あたり約450トークン増える）
+
+notify:
+  quiet_hours: ["00:00", "07:00"]  # この間は即時通知を送らず、次のまとめ報告に回す（無効にするなら []）
+  max_urgent_per_hour: 5           # 即時通知の上限。超えた分はまとめ報告に回す
+  max_urgent_per_day: 20
+  reminder_hours: [72, 24]         # 締切の何時間前にリマインドするか
+  line_monthly_limit: 200          # LINE の月間送信数の上限（無料プランに合わせる）。近づいたらまとめ報告だけにする
+
+digest:
+  times: ["07:00", "21:00"]        # まとめ報告の時刻。正午より前は今日の予定、以降は明日の予定を載せる
+  deadline_days: 3                 # 何日以内の締切を載せるか
+  max_items: 10                    # まとめ待ちのメールを何通まで載せるか

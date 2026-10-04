@@ -26,6 +26,36 @@ const (
 	TierRecord Tier = "record" // 記録のみ
 )
 
+// NotifyState は通知の状態。
+type NotifyState string
+
+const (
+	NotifyNone   NotifyState = "none"   // 知らせない（記録のみ）
+	NotifyUrgent NotifyState = "urgent" // 即時通知を待っている
+	NotifyDigest NotifyState = "digest" // 次のまとめ報告を待っている
+	NotifyDone   NotifyState = "done"   // 知らせ済み
+)
+
+// NotifyStateFor は判定の段階から最初の通知の状態を決める。
+func NotifyStateFor(t Tier) NotifyState {
+	switch t {
+	case TierUrgent:
+		return NotifyUrgent
+	case TierDigest:
+		return NotifyDigest
+	}
+	return NotifyNone
+}
+
+// Notification は notifications/{id} に保存する送信の記録。回数の上限の判定と監査に使う。
+type Notification struct {
+	At         time.Time `firestore:"at"`
+	Kind       string    `firestore:"kind"` // urgent / digest / reminder / guard
+	Channel    string    `firestore:"channel"`
+	MessageIDs []string  `firestore:"messageIds"`
+	ExpiresAt  time.Time `firestore:"expiresAt"`
+}
+
 // TriageMethod は判定に何を使ったか。
 type TriageMethod string
 
@@ -83,6 +113,13 @@ type Message struct {
 	Extracted      *llm.Extraction `firestore:"extracted,omitempty"`
 	Triage         *TriageResult   `firestore:"triage,omitempty"`
 	TriageAttempts int             `firestore:"triageAttempts"`
+
+	// Notify は通知の状態。判定時に段階から決まり、送ったら NotifyDone になる。
+	Notify NotifyState `firestore:"notify"`
+	// NotifiedAt は即時通知かまとめ報告で知らせた時刻。
+	NotifiedAt time.Time `firestore:"notifiedAt"`
+	// Reminded は送り済みの締切リマインド（締切の何時間前か）。
+	Reminded []int `firestore:"reminded"`
 
 	// Headers は転送元の判別に使う生のヘッダー。保存はしない。
 	Headers map[string][]string `firestore:"-"`

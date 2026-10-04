@@ -31,7 +31,7 @@ func newFakeStore(msgs ...*model.Message) *fakeStore {
 func (f *fakeStore) ListPending(context.Context, int) ([]*model.Message, error) {
 	return f.pending, nil
 }
-func (f *fakeStore) SaveTriage(_ context.Context, id string, ex *llm.Extraction, res model.TriageResult) error {
+func (f *fakeStore) SaveTriage(_ context.Context, id string, ex *llm.Extraction, res model.TriageResult, _ bool) error {
 	f.saved[id], f.extract[id] = res, ex
 	return nil
 }

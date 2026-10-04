@@ -4,6 +4,7 @@
 //
 //	POST /pubsub/gmail       Gmail の新着通知（Pub/Sub push）→ 差分を取り込み、必要度を判定する
 //	POST /jobs/renew-watch   Gmail の watch を張り直し、判定し残したメールを判定する（Cloud Scheduler から毎日）
+//	POST /jobs/tick          即時通知・締切リマインド・まとめ報告（Cloud Scheduler から15分おき）
 //	GET  /healthz            死活確認
 //
 // ローカルでの確認用に、1回だけ実行して終了するモードもある:
@@ -12,6 +13,7 @@
 //	go run ./cmd/server -once renew-watch   watch を張り直す
 //	go run ./cmd/server -once triage        未判定のメールをすべて判定
 //	go run ./cmd/server -once backfill -days 30   過去 30 日の受信トレイを取り込んで判定（重みの調整用）
+//	go run ./cmd/server -once tick          通知の処理を1回だけ行う
 package main
 
 import (
@@ -32,13 +34,16 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Tatsubooom/sheepbutler/internal/calendar"
 	"github.com/Tatsubooom/sheepbutler/internal/config"
+	"github.com/Tatsubooom/sheepbutler/internal/dispatch"
 	"github.com/Tatsubooom/sheepbutler/internal/envfile"
 	"github.com/Tatsubooom/sheepbutler/internal/googleauth"
 	"github.com/Tatsubooom/sheepbutler/internal/ingest"
 	"github.com/Tatsubooom/sheepbutler/internal/llm"
 	"github.com/Tatsubooom/sheepbutler/internal/logx"
 	"github.com/Tatsubooom/sheepbutler/internal/mail"
+	"github.com/Tatsubooom/sheepbutler/internal/notify"
 	"github.com/Tatsubooom/sheepbutler/internal/source"
 	"github.com/Tatsubooom/sheepbutler/internal/store"
 	"github.com/Tatsubooom/sheepbutler/internal/triage"
@@ -138,6 +143,9 @@ func run(once string, days int, log *slog.Logger) error {
 			Log:       log,
 		},
 	}
+	if s.dispatcher, err = newDispatcher(ctx, cfg, env, gm, fs, hc, jst, log); err != nil {
+		return err
+	}
 
 	switch once {
 	case "":
@@ -150,6 +158,11 @@ func run(once string, days int, log *slog.Logger) error {
 		return s.renewWatch(ctx)
 	case "triage":
 		return s.triageAll(ctx)
+	case "tick":
+		if s.dispatcher == nil {
+			return errors.New("通知先が設定されていません")
+		}
+		return s.dispatcher.Tick(ctx)
 	case "backfill":
 		res, err := s.syncer.Backfill(ctx, fmt.Sprintf("in:inbox newer_than:%dd", days), 500)
 		if err != nil {
@@ -158,7 +171,7 @@ func run(once string, days int, log *slog.Logger) error {
 		log.Info("過去のメールを取り込みました", "found", res.Found, "created", res.Created, "skipped", res.Skipped)
 		return s.triageAll(ctx)
 	default:
-		return fmt.Errorf("-once には sync / renew-watch / triage / backfill を指定してください: %q", once)
+		return fmt.Errorf("-once には sync / renew-watch / triage / backfill / tick を指定してください: %q", once)
 	}
 
 	srv := &http.Server{
@@ -192,11 +205,36 @@ func loadAppConfig(path string, explicit bool) (config.Config, error) {
 	return config.Load(path)
 }
 
+// newDispatcher は通知の仕組みを組み立てる。通知先が未設定なら nil を返し、判定までで止める。
+func newDispatcher(ctx context.Context, cfg config.Config, env envConfig, gm *mail.Gmail, fs *store.Firestore,
+	hc *http.Client, loc *time.Location, log *slog.Logger) (*dispatch.Dispatcher, error) {
+	n, err := notify.FromEnv()
+	if err != nil {
+		log.Warn("通知先が未設定のため、通知は行いません", "err", err)
+		return nil, nil
+	}
+	d := &dispatch.Dispatcher{Store: fs, Notifier: n, Config: cfg, Loc: loc, Retention: env.Retention, Log: log}
+	if id := os.Getenv("GOOGLE_CALENDAR_ID"); id != "" {
+		cal, err := calendar.NewGoogle(ctx, hc, id, loc)
+		if err != nil {
+			return nil, err
+		}
+		d.Calendar = cal
+	}
+	if account, err := gm.Email(ctx); err == nil {
+		d.Link = func(id string) string { return mail.Link(account, id) }
+	} else {
+		log.Warn("専用 Gmail のアドレスを取得できないため、メールへのリンクは付けません", "err", err)
+	}
+	return d, nil
+}
+
 type server struct {
-	log     *slog.Logger
-	topic   string
-	syncer  *ingest.Syncer
-	triager *triage.Triager
+	log        *slog.Logger
+	topic      string
+	syncer     *ingest.Syncer
+	triager    *triage.Triager
+	dispatcher *dispatch.Dispatcher
 }
 
 func (s *server) routes() http.Handler {
@@ -206,6 +244,7 @@ func (s *server) routes() http.Handler {
 	})
 	mux.HandleFunc("POST /pubsub/gmail", s.handleGmailPush)
 	mux.HandleFunc("POST /jobs/renew-watch", s.handleRenewWatch)
+	mux.HandleFunc("POST /jobs/tick", s.handleTick)
 	return mux
 }
 
@@ -244,9 +283,31 @@ func (s *server) handleGmailPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 判定の失敗は取り込みの再送では直らないので 204 を返す。判定し残しは次の通知か毎日のジョブで拾う。
-	tctx, tcancel := context.WithTimeout(r.Context(), 40*time.Second)
+	tctx, tcancel := context.WithTimeout(r.Context(), 35*time.Second)
 	defer tcancel()
 	s.triageBatch(tctx)
+	// 即時通知は判定の直後に送る。失敗しても次の tick で再送する。
+	if s.dispatcher != nil {
+		dctx, dcancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer dcancel()
+		if _, err := s.dispatcher.SendUrgent(dctx); err != nil {
+			s.log.Error("即時通知に失敗（次の tick で再送）", "err", err)
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleTick(w http.ResponseWriter, r *http.Request) {
+	if s.dispatcher == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	if err := s.dispatcher.Tick(ctx); err != nil {
+		// 失敗した処理は次の tick でやり直すので、Scheduler には成功を返して再試行の連打を防ぐ。
+		s.log.Error("通知の処理に失敗", "err", err)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
