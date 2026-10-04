@@ -1,0 +1,8 @@
+# 秘密情報とビルドに不要なものはイメージに含めない
+.env
+.secrets/
+bin/
+graft/
+.git/
+.claude/
+docs/
