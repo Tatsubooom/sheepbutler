@@ -348,3 +348,70 @@ func (f *Firestore) SetLastDigest(ctx context.Context, slot time.Time) error {
 	_, err := f.c.Collection(colState).Doc(docDigest).Set(ctx, map[string]any{"lastSlot": slot, "updatedAt": time.Now()})
 	return err
 }
+
+const (
+	colCompanies = "companies"
+	colHistory   = "history"
+)
+
+// GetCompany は企業を返す。無ければ nil。
+func (f *Firestore) GetCompany(ctx context.Context, id string) (*model.Company, error) {
+	snap, err := f.c.Collection(colCompanies).Doc(id).Get(ctx)
+	if status.Code(err) == codes.NotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var c model.Company
+	if err := snap.DataTo(&c); err != nil {
+		return nil, err
+	}
+	c.ID = id
+	return &c, nil
+}
+
+// SaveCompany は企業と変化の記録をトランザクションで保存する。同じメールの記録が既にあれば false を返す。
+func (f *Firestore) SaveCompany(ctx context.Context, c *model.Company, h model.History) (bool, error) {
+	ref := f.c.Collection(colCompanies).Doc(c.ID)
+	href := ref.Collection(colHistory).Doc(h.MessageID)
+	applied := false
+	err := f.c.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		applied = false
+		if _, err := tx.Get(href); err == nil {
+			return nil // このメールは処理済み
+		} else if status.Code(err) != codes.NotFound {
+			return err
+		}
+		if err := tx.Set(ref, c); err != nil {
+			return err
+		}
+		applied = true
+		return tx.Create(href, h)
+	})
+	return applied, err
+}
+
+// ListCompanies はすべての企業を返す。
+func (f *Firestore) ListCompanies(ctx context.Context) ([]*model.Company, error) {
+	docs, err := f.c.Collection(colCompanies).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.Company, 0, len(docs))
+	for _, d := range docs {
+		var c model.Company
+		if err := d.DataTo(&c); err != nil {
+			return nil, fmt.Errorf("companies/%s: %w", d.Ref.ID, err)
+		}
+		c.ID = d.Ref.ID
+		out = append(out, &c)
+	}
+	return out, nil
+}
+
+// SetSelectionChange はメールに選考状況の変化を書き添える。
+func (f *Firestore) SetSelectionChange(ctx context.Context, messageID, text string) error {
+	_, err := f.c.Collection(colMessages).Doc(messageID).Update(ctx, []firestore.Update{{Path: "selectionChange", Value: text}})
+	return err
+}

@@ -44,6 +44,7 @@ import (
 	"github.com/Tatsubooom/sheepbutler/internal/logx"
 	"github.com/Tatsubooom/sheepbutler/internal/mail"
 	"github.com/Tatsubooom/sheepbutler/internal/notify"
+	"github.com/Tatsubooom/sheepbutler/internal/selection"
 	"github.com/Tatsubooom/sheepbutler/internal/source"
 	"github.com/Tatsubooom/sheepbutler/internal/store"
 	"github.com/Tatsubooom/sheepbutler/internal/triage"
@@ -143,8 +144,14 @@ func run(once string, days int, log *slog.Logger) error {
 			Log:       log,
 		},
 	}
+	// 選考状況: 判定の直後に更新し、まとめ報告に載せる。
+	tracker := &selection.Tracker{Store: fs, Config: cfg, Log: log}
+	s.triager.AfterTriage = tracker.Apply
 	if s.dispatcher, err = newDispatcher(ctx, cfg, env, gm, fs, hc, jst, log); err != nil {
 		return err
+	}
+	if s.dispatcher != nil {
+		s.dispatcher.Selection = tracker
 	}
 
 	switch once {
