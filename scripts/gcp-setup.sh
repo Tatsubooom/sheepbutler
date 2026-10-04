@@ -19,7 +19,8 @@ echo "== API を有効化"
 gcloud services enable \
   gmail.googleapis.com calendar-json.googleapis.com pubsub.googleapis.com \
   firestore.googleapis.com run.googleapis.com cloudscheduler.googleapis.com \
-  secretmanager.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com
+  secretmanager.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com \
+  cloudbilling.googleapis.com billingbudgets.googleapis.com
 
 echo "== Firestore（ネイティブモード, $REGION）"
 if ! gcloud firestore databases describe --database='(default)' >/dev/null 2>&1; then
@@ -67,5 +68,5 @@ cat <<EOF
   1. docs/setup/m0.md に従って OAuth クライアントを作り、go run ./cmd/authorize を実行
   2. go run ./cmd/m0check で接続を確認
   3. 確認できたら ./scripts/upload-secrets.sh で .env と .secrets の値を Secret Manager に登録
-  4. コンソールの「お支払い → 予算とアラート」で予算アラート（例: 月 500 円）を設定
+  4. ./scripts/deploy.sh でデプロイ（予算の監視と自動停止も設定される）
 EOF

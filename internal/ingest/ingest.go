@@ -9,6 +9,7 @@ import (
 
 	"github.com/Tatsubooom/sheepbutler/internal/mail"
 	"github.com/Tatsubooom/sheepbutler/internal/model"
+	"github.com/Tatsubooom/sheepbutler/internal/source"
 )
 
 // Mailbox は取り込みに必要な Gmail の操作。
@@ -38,6 +39,7 @@ const (
 type Syncer struct {
 	Mailbox   Mailbox
 	Store     Store
+	Sources   []source.Source // 転送元アカウント。どれ宛てのメールかを判別して記録する
 	Retention time.Duration
 	Now       func() time.Time
 }
@@ -116,6 +118,7 @@ func (s *Syncer) ingestOne(ctx context.Context, id string) (bool, error) {
 		return false, err
 	}
 	now := s.now()
+	m.Source = source.Detect(s.Sources, m.Headers)
 	m.Status = model.StatusNew
 	m.IngestedAt = now
 	m.ExpiresAt = m.ReceivedAt.Add(s.Retention)

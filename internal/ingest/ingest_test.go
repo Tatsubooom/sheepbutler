@@ -8,6 +8,7 @@ import (
 
 	"github.com/Tatsubooom/sheepbutler/internal/mail"
 	"github.com/Tatsubooom/sheepbutler/internal/model"
+	"github.com/Tatsubooom/sheepbutler/internal/source"
 )
 
 type fakeMailbox struct {
@@ -37,7 +38,12 @@ func (f *fakeMailbox) Get(_ context.Context, id string) (*model.Message, error) 
 	if err := f.getErr[id]; err != nil {
 		return nil, err
 	}
-	return &model.Message{ID: id, Subject: "件名 " + id, ReceivedAt: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)}, nil
+	return &model.Message{
+		ID:         id,
+		Subject:    "件名 " + id,
+		ReceivedAt: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC),
+		Headers:    map[string][]string{"To": {"12abc345@ms.dendai.ac.jp"}},
+	}, nil
 }
 func (f *fakeMailbox) Watch(context.Context, string) (uint64, time.Time, error) {
 	return f.watchID, f.watchExp, nil
@@ -78,7 +84,13 @@ func (f *fakeStore) CreateMessage(_ context.Context, m *model.Message) (bool, er
 var now = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 
 func newSyncer(mb *fakeMailbox, st *fakeStore) *Syncer {
-	return &Syncer{Mailbox: mb, Store: st, Retention: 90 * 24 * time.Hour, Now: func() time.Time { return now }}
+	return &Syncer{
+		Mailbox:   mb,
+		Store:     st,
+		Sources:   []source.Source{{Label: "大学", Address: "12abc345@ms.dendai.ac.jp"}},
+		Retention: 90 * 24 * time.Hour,
+		Now:       func() time.Time { return now },
+	}
 }
 
 func TestSyncFirstRunOnlyRecordsHistoryID(t *testing.T) {
@@ -111,6 +123,9 @@ func TestSyncIngestsNewMessages(t *testing.T) {
 	m := st.messages["a"]
 	if m.Status != model.StatusNew || !m.IngestedAt.Equal(now) {
 		t.Errorf("状態と取り込み時刻: %+v", m)
+	}
+	if m.Source != "大学" {
+		t.Errorf("転送元 = %q, want 大学", m.Source)
 	}
 	if want := m.ReceivedAt.Add(90 * 24 * time.Hour); !m.ExpiresAt.Equal(want) {
 		t.Errorf("ExpiresAt = %v, want %v（受信日時＋保存期間）", m.ExpiresAt, want)

@@ -22,6 +22,7 @@ import (
 	"github.com/Tatsubooom/sheepbutler/internal/envfile"
 	"github.com/Tatsubooom/sheepbutler/internal/googleauth"
 	"github.com/Tatsubooom/sheepbutler/internal/notify"
+	"github.com/Tatsubooom/sheepbutler/internal/source"
 )
 
 type check struct {
@@ -41,7 +42,7 @@ func main() {
 
 	checks := []check{
 		{"Gmail（専用アカウント）", checkGmail},
-		{"大学メールの転送", checkForwarding},
+		{"メールの転送", checkForwarding},
 		{"Google カレンダー", checkCalendar},
 		{"Claude API", checkClaude},
 	}
@@ -109,7 +110,11 @@ func checkGmail(ctx context.Context) (string, error) {
 }
 
 func checkForwarding(ctx context.Context) (string, error) {
-	addr, err := requireEnv("UNIVERSITY_MAIL_ADDRESS")
+	raw, err := requireEnv("MAIL_SOURCES")
+	if err != nil {
+		return "", err
+	}
+	srcs, err := source.Parse(raw)
 	if err != nil {
 		return "", err
 	}
@@ -121,25 +126,39 @@ func checkForwarding(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// 転送されたメールは元の宛先（大学アドレス）を To に残すため、それで検索する。
-	res, err := svc.Users.Messages.List("me").Q("to:" + addr + " newer_than:14d").MaxResults(1).Context(ctx).Do()
+	// 本番と同じ判別処理で、直近のメールがどの転送元から来たかを数える。
+	res, err := svc.Users.Messages.List("me").Q("in:inbox newer_than:14d").MaxResults(100).Context(ctx).Do()
 	if err != nil {
 		return "", err
 	}
-	if len(res.Messages) == 0 {
-		return "", errors.New("過去14日間に大学アドレス宛てのメールが見つかりません。転送ルールを確認し、大学アドレスにテストメールを送ってください")
+	count := map[string]int{}
+	for _, m := range res.Messages {
+		full, err := svc.Users.Messages.Get("me", m.Id).Format("metadata").MetadataHeaders(source.Headers()...).Context(ctx).Do()
+		if err != nil {
+			return "", err
+		}
+		headers := map[string][]string{}
+		for _, h := range full.Payload.Headers {
+			headers[h.Name] = append(headers[h.Name], h.Value)
+		}
+		count[source.Detect(srcs, headers)]++
 	}
-	m, err := svc.Users.Messages.Get("me", res.Messages[0].Id).Format("metadata").MetadataHeaders("Subject").Context(ctx).Do()
-	if err != nil {
-		return "", err
-	}
-	subject := ""
-	for _, h := range m.Payload.Headers {
-		if h.Name == "Subject" {
-			subject = h.Value
+	var ok, missing []string
+	for _, s := range srcs {
+		if n := count[s.Label]; n > 0 {
+			ok = append(ok, fmt.Sprintf("%s %d 通", s.Label, n))
+		} else {
+			missing = append(missing, s.Label+"（"+s.Address+"）")
 		}
 	}
-	return fmt.Sprintf("転送を確認（最新: %q）", truncate(subject, 40)), nil
+	if n := count[source.Unknown]; n > 0 {
+		ok = append(ok, fmt.Sprintf("転送元不明 %d 通", n))
+	}
+	if len(missing) > 0 {
+		return "", fmt.Errorf("過去14日間に次の宛先のメールが見つかりません: %s。転送設定を確認し、そのアドレスにテストメールを送ってください（届いたもの: %s）",
+			strings.Join(missing, "、"), strings.Join(ok, "、"))
+	}
+	return "転送を確認: " + strings.Join(ok, "、"), nil
 }
 
 func checkCalendar(ctx context.Context) (string, error) {
@@ -230,12 +249,4 @@ func notifierFromEnv() (notify.Notifier, error) {
 	default:
 		return nil, fmt.Errorf("NOTIFY_CHANNEL は discord か line を指定してください（現在: %q）", ch)
 	}
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
 }

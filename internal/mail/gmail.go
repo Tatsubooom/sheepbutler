@@ -13,6 +13,7 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/Tatsubooom/sheepbutler/internal/model"
+	"github.com/Tatsubooom/sheepbutler/internal/source"
 )
 
 // ErrHistoryExpired は保存していた履歴 ID が古すぎて差分を取得できないことを示す。
@@ -92,9 +93,10 @@ func (g *Gmail) Recent(ctx context.Context, query string, max int64) ([]string, 
 
 // Get はメールのヘッダーと冒頭の抜粋を取得する。本文は取得しない。
 func (g *Gmail) Get(ctx context.Context, id string) (*model.Message, error) {
+	headers := append([]string{"From", "Subject"}, source.Headers()...)
 	m, err := g.svc.Users.Messages.Get("me", id).
 		Format("metadata").
-		MetadataHeaders("From", "To", "Subject").
+		MetadataHeaders(headers...).
 		Context(ctx).Do()
 	if err != nil {
 		return nil, err
@@ -106,9 +108,11 @@ func (g *Gmail) Get(ctx context.Context, id string) (*model.Message, error) {
 		// Gmail の snippet は HTML エスケープされている（&#39; など）。
 		Snippet:  html.UnescapeString(m.Snippet),
 		LabelIDs: m.LabelIds,
+		Headers:  map[string][]string{},
 	}
 	if m.Payload != nil {
 		for _, h := range m.Payload.Headers {
+			msg.Headers[h.Name] = append(msg.Headers[h.Name], h.Value)
 			switch h.Name {
 			case "From":
 				msg.From = h.Value

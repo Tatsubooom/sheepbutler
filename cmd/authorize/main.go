@@ -75,7 +75,7 @@ func main() {
 	go srv.Serve(ln)
 	defer srv.Close()
 
-	fmt.Println("ブラウザで同意画面を開きます。**専用 Gmail アカウント**でログインしてください。")
+	fmt.Println("ブラウザで同意画面を開きます。「専用 Gmail アカウント」でログインしてください。")
 	fmt.Println("開かない場合は次の URL を手動で開いてください:\n" + authURL)
 	openBrowser(authURL)
 

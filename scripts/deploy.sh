@@ -26,6 +26,11 @@ if ! gcloud iam service-accounts describe "$INVOKER_SA" >/dev/null 2>&1; then
   gcloud iam service-accounts create "$INVOKER_NAME" --display-name="SheepButler invoker (Pub/Sub, Scheduler)"
 fi
 
+# 転送元アカウントの一覧は .env の MAIL_SOURCES から読む（例: 大学=a@ms.dendai.ac.jp;個人=b@gmail.com）。
+MAIL_SOURCES="${MAIL_SOURCES:-$(grep -E '^MAIL_SOURCES=' .env 2>/dev/null | head -1 | cut -d= -f2- || true)}"
+: "${MAIL_SOURCES:?.env に MAIL_SOURCES を設定してください}"
+case "$MAIL_SOURCES" in *,*) echo "MAIL_SOURCES の区切りは ; です（, は使えません）"; exit 1 ;; esac
+
 echo "== Cloud Run にデプロイ（ソースからビルド）"
 gcloud run deploy "$SERVICE" \
   --source . \
@@ -34,7 +39,7 @@ gcloud run deploy "$SERVICE" \
   --no-allow-unauthenticated \
   --max-instances 1 \
   --memory 256Mi \
-  --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GMAIL_PUBSUB_TOPIC=projects/$PROJECT_ID/topics/$TOPIC,RETENTION_DAYS=${RETENTION_DAYS:-90}" \
+  --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GMAIL_PUBSUB_TOPIC=projects/$PROJECT_ID/topics/$TOPIC,RETENTION_DAYS=${RETENTION_DAYS:-90},MAIL_SOURCES=$MAIL_SOURCES" \
   --set-secrets "GOOGLE_OAUTH_CLIENT_JSON=google-oauth-client:latest,GOOGLE_OAUTH_TOKEN_JSON=google-oauth-token:latest" \
   --quiet
 
@@ -75,9 +80,27 @@ if gcloud scheduler jobs describe "$JOB" --location="$REGION" >/dev/null 2>&1; t
 else
   gcloud scheduler jobs create http "$JOB" "${JOB_ARGS[@]}" >/dev/null
 fi
+# ガードが一時停止していた場合に備えて再開する（既に有効なら何もしない）。
+gcloud scheduler jobs resume "$JOB" --location="$REGION" >/dev/null 2>&1 || true
 
 echo "== watch を今すぐ登録"
 gcloud scheduler jobs run "$JOB" --location="$REGION"
+
+# デプロイのたびにイメージが溜まると Artifact Registry の無料枠（0.5GB）を超えるため、最新2つだけ残す。
+echo "== 古いイメージの自動削除"
+POLICY=$(mktemp)
+cat > "$POLICY" <<'JSON'
+[
+  {"name": "keep-recent", "action": {"type": "Keep"}, "mostRecentVersions": {"keepCount": 2}},
+  {"name": "delete-others", "action": {"type": "Delete"}, "condition": {"tagState": "ANY"}}
+]
+JSON
+gcloud artifacts repositories set-cleanup-policies cloud-run-source-deploy \
+  --location="$REGION" --policy="$POLICY" --no-dry-run >/dev/null
+rm -f "$POLICY"
+
+# 予算の監視と自動停止（ガード）も同時に更新する。
+./scripts/deploy-guard.sh
 
 cat <<EOF
 

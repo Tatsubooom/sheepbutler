@@ -32,6 +32,7 @@ import (
 	"github.com/Tatsubooom/sheepbutler/internal/ingest"
 	"github.com/Tatsubooom/sheepbutler/internal/logx"
 	"github.com/Tatsubooom/sheepbutler/internal/mail"
+	"github.com/Tatsubooom/sheepbutler/internal/source"
 	"github.com/Tatsubooom/sheepbutler/internal/store"
 )
 
@@ -39,6 +40,7 @@ type config struct {
 	Port      string
 	ProjectID string
 	Topic     string
+	Sources   []source.Source
 	Retention time.Duration
 }
 
@@ -56,6 +58,9 @@ func loadConfig() (config, error) {
 		return c, fmt.Errorf("RETENTION_DAYS は正の整数で指定してください: %q", os.Getenv("RETENTION_DAYS"))
 	}
 	c.Retention = time.Duration(days) * 24 * time.Hour
+	if c.Sources, err = source.Parse(os.Getenv("MAIL_SOURCES")); err != nil {
+		return c, err
+	}
 	return c, nil
 }
 
@@ -99,7 +104,7 @@ func run(once string, log *slog.Logger) error {
 	s := &server{
 		log:    log,
 		topic:  cfg.Topic,
-		syncer: &ingest.Syncer{Mailbox: gm, Store: fs, Retention: cfg.Retention},
+		syncer: &ingest.Syncer{Mailbox: gm, Store: fs, Sources: cfg.Sources, Retention: cfg.Retention},
 	}
 
 	switch once {
