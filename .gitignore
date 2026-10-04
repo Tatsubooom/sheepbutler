@@ -6,3 +6,6 @@
 .secrets/
 /bin/
 .claude/settings.local.json
+
+# 志望企業などの個人情報を含む設定（config.example.yaml をコピーして使う）
+config.yaml

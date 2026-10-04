@@ -31,16 +31,26 @@ MAIL_SOURCES="${MAIL_SOURCES:-$(grep -E '^MAIL_SOURCES=' .env 2>/dev/null | head
 : "${MAIL_SOURCES:?.env に MAIL_SOURCES を設定してください}"
 case "$MAIL_SOURCES" in *,*) echo "MAIL_SOURCES の区切りは ; です（, は使えません）"; exit 1 ;; esac
 
+# 秘密情報。config.yaml（app-config）は登録されていればファイルとしてマウントし、無ければ初期設定で動かす。
+SECRETS_ARG="GOOGLE_OAUTH_CLIENT_JSON=google-oauth-client:latest,GOOGLE_OAUTH_TOKEN_JSON=google-oauth-token:latest,ANTHROPIC_API_KEY=anthropic-api-key:latest"
+if gcloud secrets versions describe latest --secret=app-config >/dev/null 2>&1; then
+  SECRETS_ARG="$SECRETS_ARG,/config/config.yaml=app-config:latest"
+else
+  echo "   config.yaml が未登録のため、判定は初期設定で動かす（scripts/upload-secrets.sh で登録できる）"
+fi
+
 echo "== Cloud Run にデプロイ（ソースからビルド）"
-gcloud run deploy "$SERVICE" \
+# Windows の Git Bash は "=/config/..." のような値をパスとみなして書き換えるため、環境変数と秘密情報の引数は変換しない。
+MSYS2_ARG_CONV_EXCL="--set-env-vars=;--set-secrets=" gcloud run deploy "$SERVICE" \
   --source . \
   --region "$REGION" \
   --service-account "$RUN_SA" \
   --no-allow-unauthenticated \
   --max-instances 1 \
   --memory 256Mi \
-  --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GMAIL_PUBSUB_TOPIC=projects/$PROJECT_ID/topics/$TOPIC,RETENTION_DAYS=${RETENTION_DAYS:-90},MAIL_SOURCES=$MAIL_SOURCES" \
-  --set-secrets "GOOGLE_OAUTH_CLIENT_JSON=google-oauth-client:latest,GOOGLE_OAUTH_TOKEN_JSON=google-oauth-token:latest" \
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GMAIL_PUBSUB_TOPIC=projects/$PROJECT_ID/topics/$TOPIC,RETENTION_DAYS=${RETENTION_DAYS:-90},MAIL_SOURCES=$MAIL_SOURCES,CONFIG_PATH=/config/config.yaml" \
+  --set-secrets="$SECRETS_ARG" \
+  --timeout 300 \
   --quiet
 
 URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')

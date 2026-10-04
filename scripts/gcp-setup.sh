@@ -11,7 +11,7 @@ set -euo pipefail
 REGION="${REGION:-asia-northeast1}"
 TOPIC="${TOPIC:-gmail-push}"
 RUN_SA="${RUN_SA:-sheepbutler-run}"
-SECRETS=(anthropic-api-key discord-bot-token line-channel-access-token google-oauth-client google-oauth-token)
+SECRETS=(anthropic-api-key discord-bot-token line-channel-access-token google-oauth-client google-oauth-token app-config)
 
 gcloud config set project "$PROJECT_ID" >/dev/null
 
@@ -29,9 +29,10 @@ else
   echo "   既に存在するのでスキップ"
 fi
 
-# messages の expiresAt を過ぎたドキュメントを自動削除する（保存期間の上限）。
-echo "== Firestore の TTL ポリシー（messages.expiresAt）"
+# messages と audit の expiresAt を過ぎたドキュメントを自動削除する（保存期間の上限）。
+echo "== Firestore の TTL ポリシー（messages, audit の expiresAt）"
 gcloud firestore fields ttls update expiresAt --collection-group=messages --enable-ttl --async >/dev/null
+gcloud firestore fields ttls update expiresAt --collection-group=audit --enable-ttl --async >/dev/null
 
 echo "== Pub/Sub トピック $TOPIC（Gmail の新着通知を受け取る）"
 if ! gcloud pubsub topics describe "$TOPIC" >/dev/null 2>&1; then

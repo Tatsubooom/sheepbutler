@@ -3,12 +3,15 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"time"
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/Tatsubooom/sheepbutler/internal/llm"
 	"github.com/Tatsubooom/sheepbutler/internal/model"
 )
 
@@ -110,4 +113,124 @@ func (f *Firestore) CreateMessage(ctx context.Context, m *model.Message) (bool, 
 		return false, nil
 	}
 	return err == nil, err
+}
+
+const (
+	colUsage = "usage"
+	colAudit = "audit"
+)
+
+// ListPending は未判定（status=new）のメールを最大 limit 件返す。
+func (f *Firestore) ListPending(ctx context.Context, limit int) ([]*model.Message, error) {
+	docs, err := f.c.Collection(colMessages).Where("status", "==", string(model.StatusNew)).Limit(limit).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.Message, 0, len(docs))
+	for _, d := range docs {
+		var m model.Message
+		if err := d.DataTo(&m); err != nil {
+			return nil, fmt.Errorf("messages/%s: %w", d.Ref.ID, err)
+		}
+		m.ID = d.Ref.ID
+		out = append(out, &m)
+	}
+	return out, nil
+}
+
+// ListTriaged は判定済みのメールを受信の新しい順に最大 limit 件返す（重みの調整用）。
+func (f *Firestore) ListTriaged(ctx context.Context, limit int) ([]*model.Message, error) {
+	docs, err := f.c.Collection(colMessages).Where("status", "==", string(model.StatusTriaged)).Limit(limit).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.Message, 0, len(docs))
+	for _, d := range docs {
+		var m model.Message
+		if err := d.DataTo(&m); err != nil {
+			return nil, fmt.Errorf("messages/%s: %w", d.Ref.ID, err)
+		}
+		m.ID = d.Ref.ID
+		out = append(out, &m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ReceivedAt.After(out[j].ReceivedAt) })
+	return out, nil
+}
+
+// SaveTriage は判定結果を保存し、状態を triaged にする。
+func (f *Firestore) SaveTriage(ctx context.Context, id string, ex *llm.Extraction, res model.TriageResult) error {
+	_, err := f.c.Collection(colMessages).Doc(id).Update(ctx, []firestore.Update{
+		{Path: "extracted", Value: ex},
+		{Path: "triage", Value: res},
+		{Path: "status", Value: string(model.StatusTriaged)},
+	})
+	return err
+}
+
+// ResetToPending は判定をやり直すために状態を new に戻す（判定の調整用）。
+func (f *Firestore) ResetToPending(ctx context.Context, id string) error {
+	_, err := f.c.Collection(colMessages).Doc(id).Update(ctx, []firestore.Update{
+		{Path: "status", Value: string(model.StatusNew)},
+		{Path: "triageAttempts", Value: 0},
+	})
+	return err
+}
+
+// IncrementAttempts は LLM の失敗回数を1増やし、増やした後の値を返す。
+func (f *Firestore) IncrementAttempts(ctx context.Context, id string) (int, error) {
+	ref := f.c.Collection(colMessages).Doc(id)
+	n := 0
+	err := f.c.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		snap, err := tx.Get(ref)
+		if err != nil {
+			return err
+		}
+		var m model.Message
+		if err := snap.DataTo(&m); err != nil {
+			return err
+		}
+		n = m.TriageAttempts + 1
+		return tx.Update(ref, []firestore.Update{{Path: "triageAttempts", Value: n}})
+	})
+	return n, err
+}
+
+// UsageCost はその日の LLM の費用（USD）を返す。
+func (f *Firestore) UsageCost(ctx context.Context, day string) (float64, error) {
+	snap, err := f.c.Collection(colUsage).Doc(day).Get(ctx)
+	if status.Code(err) == codes.NotFound {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	v, err := snap.DataAt("costUsd")
+	if err != nil {
+		return 0, nil
+	}
+	switch x := v.(type) {
+	case float64:
+		return x, nil
+	case int64:
+		return float64(x), nil
+	}
+	return 0, nil
+}
+
+// AddUsage はその日の LLM の使用量に加算する（同時に呼ばれても正しく足される）。
+func (f *Firestore) AddUsage(ctx context.Context, day string, u llm.Usage) error {
+	_, err := f.c.Collection(colUsage).Doc(day).Set(ctx, map[string]any{
+		"costUsd":      firestore.Increment(u.CostUSD),
+		"inputTokens":  firestore.Increment(u.InputTokens),
+		"outputTokens": firestore.Increment(u.OutputTokens),
+		"calls":        firestore.Increment(1),
+		"updatedAt":    time.Now(),
+	}, firestore.MergeAll)
+	return err
+}
+
+// AddAudit は LLM 呼び出しの記録を残す。expiresAt を過ぎると TTL で自動削除される。
+func (f *Firestore) AddAudit(ctx context.Context, a model.Audit) error {
+	_, _, err := f.c.Collection(colAudit).Add(ctx, a)
+	return err
 }
