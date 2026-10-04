@@ -6,3 +6,4 @@ graft/
 .git/
 .claude/
 docs/
+config.yaml

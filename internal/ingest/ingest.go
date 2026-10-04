@@ -108,6 +108,29 @@ func (s *Syncer) Sync(ctx context.Context) (Result, error) {
 	return res, s.Store.AdvanceHistoryID(ctx, latest)
 }
 
+// Backfill は検索クエリに一致する過去のメールを取り込む（重みの調整用に、過去のメールで判定を試すため）。
+// 履歴 ID は変えないので、通常の同期には影響しない。
+func (s *Syncer) Backfill(ctx context.Context, query string, max int64) (Result, error) {
+	var res Result
+	ids, err := s.Mailbox.Recent(ctx, query, max)
+	if err != nil {
+		return res, err
+	}
+	res.Found = len(ids)
+	for _, id := range ids {
+		created, err := s.ingestOne(ctx, id)
+		if err != nil {
+			return res, fmt.Errorf("メール %s の取り込み: %w", id, err)
+		}
+		if created {
+			res.Created++
+		} else {
+			res.Skipped++
+		}
+	}
+	return res, nil
+}
+
 func (s *Syncer) ingestOne(ctx context.Context, id string) (bool, error) {
 	exists, err := s.Store.MessageExists(ctx, id)
 	if err != nil || exists {

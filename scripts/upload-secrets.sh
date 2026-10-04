@@ -16,6 +16,7 @@ put() { # put <secret名> : 標準入力の内容を登録し、古いバージ�
   # 有効なバージョンの無料枠（請求先アカウント全体で 6 個）を超えないよう、最新以外は破棄する。
   gcloud secrets versions list "$1" --project="$PROJECT_ID" --filter="state=ENABLED" \
     --sort-by=~createTime --format="value(name)" | tail -n +2 | while read -r v; do
+      v="${v%$'\r'}" # Windows 版 gcloud は行末に \r を付ける
       gcloud secrets versions destroy "${v##*/}" --secret="$1" --project="$PROJECT_ID" --quiet >/dev/null
     done
   echo "   $1 を登録しました"
@@ -28,4 +29,5 @@ v=$(env_value DISCORD_BOT_TOKEN);          [ -n "$v" ] && printf '%s' "$v" | put
 v=$(env_value LINE_CHANNEL_ACCESS_TOKEN);  [ -n "$v" ] && printf '%s' "$v" | put line-channel-access-token
 [ -f .secrets/client_secret.json ] && put google-oauth-client < .secrets/client_secret.json
 [ -f .secrets/token.json ]         && put google-oauth-token  < .secrets/token.json
+[ -f config.yaml ]                 && put app-config          < config.yaml
 echo "完了"
