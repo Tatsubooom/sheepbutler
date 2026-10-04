@@ -13,13 +13,22 @@ type Discord struct {
 
 func (d *Discord) Name() string { return "Discord" }
 
+// discordMax は Discord の1メッセージの文字数の上限。
+const discordMax = 2000
+
+// Send は text を送る。上限を超える場合は複数のメッセージに分けて送る。
 func (d *Discord) Send(ctx context.Context, text string) error {
 	h := http.Header{}
 	h.Set("Authorization", "Bot "+d.BotToken)
-	// メンションによる一斉通知を防ぐため、allowed_mentions を空にする。
-	body := map[string]any{
-		"content":          text,
-		"allowed_mentions": map[string]any{"parse": []string{}},
+	for _, chunk := range Split(text, discordMax) {
+		// メール由来の文字列に @everyone などが含まれても通知が飛ばないよう、allowed_mentions を空にする。
+		body := map[string]any{
+			"content":          chunk,
+			"allowed_mentions": map[string]any{"parse": []string{}},
+		}
+		if err := postJSON(ctx, "https://discord.com/api/v10/channels/"+d.ChannelID+"/messages", h, body); err != nil {
+			return err
+		}
 	}
-	return postJSON(ctx, "https://discord.com/api/v10/channels/"+d.ChannelID+"/messages", h, body)
+	return nil
 }

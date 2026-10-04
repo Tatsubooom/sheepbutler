@@ -16,6 +16,38 @@ type Config struct {
 	Triage  Triage  `yaml:"triage"`
 	JobHunt JobHunt `yaml:"jobhunt"`
 	LLM     LLM     `yaml:"llm"`
+	Notify  Notify  `yaml:"notify"`
+	Digest  Digest  `yaml:"digest"`
+}
+
+// Notify は即時通知とリマインドの設定。時刻はすべて日本時間の "HH:MM"。
+type Notify struct {
+	// QuietHours の間は即時通知を送らず、次のまとめ報告に回す。[開始, 終了]。日をまたいでもよい。
+	QuietHours       []string `yaml:"quiet_hours"`
+	MaxUrgentPerHour int      `yaml:"max_urgent_per_hour"`
+	MaxUrgentPerDay  int      `yaml:"max_urgent_per_day"`
+	// ReminderHours は締切の何時間前にリマインドするか。
+	ReminderHours []int `yaml:"reminder_hours"`
+	// LineMonthlyLimit は LINE の月間送信数の上限。近づいたらまとめ報告だけにする。
+	LineMonthlyLimit int `yaml:"line_monthly_limit"`
+}
+
+// Digest はまとめ報告の設定。
+type Digest struct {
+	Times []string `yaml:"times"`
+	// DeadlineDays は何日以内の締切を載せるか。
+	DeadlineDays int `yaml:"deadline_days"`
+	// MaxItems はまとめ待ちのメールを何通まで載せるか（超えた分は件数だけ）。
+	MaxItems int `yaml:"max_items"`
+}
+
+// ParseClock は "HH:MM" を 0 時からの分に直す。
+func ParseClock(s string) (int, error) {
+	var h, m int
+	if _, err := fmt.Sscanf(s, "%d:%d", &h, &m); err != nil || h < 0 || h > 23 || m < 0 || m > 59 {
+		return 0, fmt.Errorf("時刻 %q は HH:MM で指定してください", s)
+	}
+	return h*60 + m, nil
 }
 
 type Triage struct {
@@ -101,6 +133,14 @@ func Default() Config {
 			PhishingTier:      "digest",
 		},
 		LLM: LLM{Model: "claude-haiku-4-5", MaxInputChars: 1500, DailyBudgetUSD: 0.5},
+		Notify: Notify{
+			QuietHours:       []string{"00:00", "07:00"},
+			MaxUrgentPerHour: 5,
+			MaxUrgentPerDay:  20,
+			ReminderHours:    []int{72, 24},
+			LineMonthlyLimit: 200,
+		},
+		Digest: Digest{Times: []string{"07:00", "21:00"}, DeadlineDays: 3, MaxItems: 10},
 	}
 }
 
@@ -155,6 +195,26 @@ func (c Config) Validate() error {
 	}
 	if c.LLM.Model == "" || c.LLM.MaxInputChars <= 0 || c.LLM.DailyBudgetUSD < 0 {
 		errs = append(errs, errors.New("llm の model / max_input_chars / daily_budget_usd を確認してください"))
+	}
+	n := c.Notify
+	if len(n.QuietHours) != 0 && len(n.QuietHours) != 2 {
+		errs = append(errs, errors.New("notify.quiet_hours は [開始, 終了] の2つで指定してください（無効にするなら []）"))
+	}
+	for _, s := range append(append([]string{}, n.QuietHours...), c.Digest.Times...) {
+		if _, err := ParseClock(s); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if n.MaxUrgentPerHour < 0 || n.MaxUrgentPerDay < 0 || n.LineMonthlyLimit < 0 {
+		errs = append(errs, errors.New("notify の上限に負の値は使えません"))
+	}
+	for _, h := range n.ReminderHours {
+		if h <= 0 {
+			errs = append(errs, errors.New("notify.reminder_hours は正の時間で指定してください"))
+		}
+	}
+	if c.Digest.DeadlineDays < 0 || c.Digest.MaxItems <= 0 {
+		errs = append(errs, errors.New("digest.deadline_days は 0 以上、max_items は 1 以上にしてください"))
 	}
 	return errors.Join(errs...)
 }

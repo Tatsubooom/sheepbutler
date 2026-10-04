@@ -224,29 +224,4 @@ func checkNotify(ctx context.Context) (string, error) {
 	return n.Name() + " に送信しました。届いているか確認してください", nil
 }
 
-func notifierFromEnv() (notify.Notifier, error) {
-	switch ch := strings.ToLower(getenv("NOTIFY_CHANNEL", "discord")); ch {
-	case "discord":
-		tok, err := requireEnv("DISCORD_BOT_TOKEN")
-		if err != nil {
-			return nil, err
-		}
-		cid, err := requireEnv("DISCORD_CHANNEL_ID")
-		if err != nil {
-			return nil, err
-		}
-		return &notify.Discord{BotToken: tok, ChannelID: cid}, nil
-	case "line":
-		tok, err := requireEnv("LINE_CHANNEL_ACCESS_TOKEN")
-		if err != nil {
-			return nil, err
-		}
-		uid, err := requireEnv("LINE_USER_ID")
-		if err != nil {
-			return nil, err
-		}
-		return &notify.LINE{ChannelAccessToken: tok, UserID: uid}, nil
-	default:
-		return nil, fmt.Errorf("NOTIFY_CHANNEL は discord か line を指定してください（現在: %q）", ch)
-	}
-}
+func notifierFromEnv() (notify.Notifier, error) { return notify.FromEnv() }

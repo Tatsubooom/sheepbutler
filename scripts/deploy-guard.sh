@@ -20,7 +20,7 @@ BILLING_TOPIC="${BILLING_TOPIC:-billing-alerts}"
 BILLING_SUB="${BILLING_SUB:-billing-alerts-sub}"
 BUDGET_NAME="${BUDGET_NAME:-SheepButler guard}"
 # ガードが止める対象（deploy.sh で作るもの。複数なら ; 区切り）
-STOP_JOBS="${STOP_JOBS:-renew-gmail-watch}"
+STOP_JOBS="${STOP_JOBS:-renew-gmail-watch;sheepbutler-tick}"
 STOP_SUBS="${STOP_SUBS:-gmail-push-sub}"
 
 cd "$(dirname "$0")/.."
