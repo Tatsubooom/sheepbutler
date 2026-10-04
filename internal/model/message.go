@@ -120,6 +120,8 @@ type Message struct {
 	NotifiedAt time.Time `firestore:"notifiedAt"`
 	// Reminded は送り済みの締切リマインド（締切の何時間前か）。
 	Reminded []int `firestore:"reminded"`
+	// SelectionChange はこのメールによる選考状況の変化（例: "○○社 書類・検査 → 面接（1次）"）。
+	SelectionChange string `firestore:"selectionChange"`
 
 	// Headers は転送元の判別に使う生のヘッダー。保存はしない。
 	Headers map[string][]string `firestore:"-"`

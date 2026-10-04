@@ -136,3 +136,18 @@ func TestTriageRetriesThenFallsBack(t *testing.T) {
 		t.Fatalf("失敗も監査ログに残す: %+v", st.audits)
 	}
 }
+
+func TestAfterTriageHook(t *testing.T) {
+	st := newFakeStore(&model.Message{ID: "a", Subject: "面接日程"})
+	l := &fakeLLM{ex: llm.Extraction{MailKind: llm.KindSelection, Company: "X社", SelectionEvent: llm.EventInterviewScheduling}}
+	tr := newTriager(st, l, &fakeBody{})
+	var got *llm.Extraction
+	tr.AfterTriage = func(_ context.Context, m *model.Message, ex *llm.Extraction) error {
+		got = ex
+		return errors.New("失敗しても判定は成功")
+	}
+	sum, _ := tr.RunPending(context.Background(), 10)
+	if got == nil || got.Company != "X社" || sum.Processed != 1 {
+		t.Fatalf("判定の後に抽出結果を渡す: got=%v sum=%+v", got, sum)
+	}
+}

@@ -38,6 +38,9 @@ type Triager struct {
 	Retention time.Duration  // 監査ログの保存期間
 	Log       *slog.Logger
 	Now       func() time.Time
+	// AfterTriage は LLM で判定したメールを保存した後に呼ばれる（選考状況の更新に使う）。
+	// 失敗してもログに残すだけで、判定自体は成功とする。
+	AfterTriage func(ctx context.Context, m *model.Message, ex *llm.Extraction) error
 }
 
 func (t *Triager) now() time.Time {
@@ -125,7 +128,15 @@ func (t *Triager) TriageOne(ctx context.Context, m *model.Message) (model.Triage
 
 	res = Score(t.Config, mail, &ex, now)
 	t.audit(ctx, m.ID, body, usage, res.Tier, nil)
-	return res, t.Store.SaveTriage(ctx, m.ID, &ex, res, true)
+	if err := t.Store.SaveTriage(ctx, m.ID, &ex, res, true); err != nil {
+		return res, err
+	}
+	if t.AfterTriage != nil {
+		if err := t.AfterTriage(ctx, m, &ex); err != nil {
+			t.Log.Error("判定後の処理に失敗", "messageId", m.ID, "err", err)
+		}
+	}
+	return res, nil
 }
 
 func (t *Triager) saveRulesOnly(ctx context.Context, m *model.Message, mail Mail, now time.Time, why string) (model.TriageResult, error) {

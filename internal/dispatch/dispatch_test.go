@@ -14,6 +14,7 @@ import (
 	"github.com/Tatsubooom/sheepbutler/internal/config"
 	"github.com/Tatsubooom/sheepbutler/internal/llm"
 	"github.com/Tatsubooom/sheepbutler/internal/model"
+	"github.com/Tatsubooom/sheepbutler/internal/selection"
 )
 
 var jst = time.FixedZone("JST", 9*3600)
@@ -309,5 +310,47 @@ func TestReminderSkippedWhenDeadlineAlreadyNearAtArrival(t *testing.T) {
 	newDispatcher(s, n, at(4, 12, 0)).SendReminders(context.Background())
 	if len(n.sent) != 0 || !slices.Contains(m.Reminded, 72) {
 		t.Fatalf("届いた時点で72時間を切っていたら、72時間前のリマインドは即時通知で伝え済みとして送らない: %v", n.sent)
+	}
+}
+
+type fakeSelection struct{ o selection.Overview }
+
+func (f *fakeSelection) Overview(context.Context, time.Time) (selection.Overview, error) {
+	return f.o, nil
+}
+
+func TestDigestSelectionSection(t *testing.T) {
+	n := &fakeNotifier{name: "Discord"}
+	d := newDispatcher(newStore(), n, at(5, 7, 0))
+	a := &model.Company{Name: "A社", Stage: model.StageInterview, Round: 2, LastChange: "面接（1次） → 面接（2次）",
+		NextAction: model.NextAction{Label: "面接日程の回答", Due: at(7, 23, 59)}}
+	b := &model.Company{Name: "B社", Stage: model.StageDocuments, LastContactAt: at(5, 7, 0).AddDate(0, 0, -12)}
+	c := &model.Company{Name: "C社", Stage: model.StageRejected, Unconfirmed: true}
+	d.Selection = &fakeSelection{o: selection.Overview{
+		Active: []*model.Company{a, b}, Changed: []*model.Company{a}, Review: []*model.Company{c}, Stale: []*model.Company{b}}}
+	d.SendDigestIfDue(context.Background())
+	for _, want := range []string{"📋 選考状況", "🆕 A社 面接（1次） → 面接（2次）", "❓ C社 不合格？",
+		"• A社 面接（2次）｜次: 面接日程の回答（10/07(水) 23:59まで）", "⌛ B社 書類・検査 — 12日間連絡がありません"} {
+		if !strings.Contains(n.sent[0], want) {
+			t.Errorf("本文に %q が無い:\n%s", want, n.sent[0])
+		}
+	}
+}
+
+func TestDigestOmitsEmptySelection(t *testing.T) {
+	n := &fakeNotifier{name: "Discord"}
+	d := newDispatcher(newStore(), n, at(5, 7, 0))
+	d.Selection = &fakeSelection{}
+	d.SendDigestIfDue(context.Background())
+	if strings.Contains(n.sent[0], "選考状況") {
+		t.Fatal("選考中の企業が無ければ欄を省く")
+	}
+}
+
+func TestUrgentShowsSelectionChange(t *testing.T) {
+	m := urgentMsg("a")
+	m.SelectionChange = "A社 書類・検査 → 面接（1次）"
+	if !strings.Contains(formatUrgent(m, at(4, 12, 0), jst, ""), "選考: A社 書類・検査 → 面接（1次）") {
+		t.Fatal("即時通知に選考状況の変化を書き添える")
 	}
 }

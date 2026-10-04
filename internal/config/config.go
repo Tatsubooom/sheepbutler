@@ -96,6 +96,8 @@ type JobHunt struct {
 	Profile   string             `yaml:"profile"`
 	Companies []Company          `yaml:"companies"`
 	Keywords  map[string]float64 `yaml:"keywords"`
+	// StaleAfterDays は書類・面接の段階で連絡が途絶えたと見なす日数。
+	StaleAfterDays int `yaml:"stale_after_days"`
 }
 
 type Company struct {
@@ -140,7 +142,8 @@ func Default() Config {
 			ReminderHours:    []int{72, 24},
 			LineMonthlyLimit: 200,
 		},
-		Digest: Digest{Times: []string{"07:00", "21:00"}, DeadlineDays: 3, MaxItems: 10},
+		Digest:  Digest{Times: []string{"07:00", "21:00"}, DeadlineDays: 3, MaxItems: 10},
+		JobHunt: JobHunt{StaleAfterDays: 10},
 	}
 }
 
@@ -221,13 +224,13 @@ func (c Config) Validate() error {
 
 // FindCompany は企業名（表記揺れを含む）から登録済みの企業を探す。
 func (c Config) FindCompany(name string) (Company, bool) {
-	n := normalizeCompany(name)
+	n := NormalizeCompany(name)
 	if n == "" {
 		return Company{}, false
 	}
 	for _, co := range c.JobHunt.Companies {
 		for _, cand := range append([]string{co.Name}, co.Aliases...) {
-			if normalizeCompany(cand) == n {
+			if NormalizeCompany(cand) == n {
 				return co, true
 			}
 		}
@@ -235,8 +238,8 @@ func (c Config) FindCompany(name string) (Company, bool) {
 	return Company{}, false
 }
 
-// normalizeCompany は「株式会社」の有無や空白・大文字小文字の違いを吸収する。
-func normalizeCompany(s string) string {
+// NormalizeCompany は「株式会社」の有無や空白・大文字小文字の違いを吸収する。
+func NormalizeCompany(s string) string {
 	s = strings.ToLower(s)
 	for _, r := range []string{"株式会社", "(株)", "（株）", "有限会社", "合同会社", " ", "　"} {
 		s = strings.ReplaceAll(s, r, "")

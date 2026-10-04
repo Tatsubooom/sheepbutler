@@ -19,6 +19,7 @@ import (
 	"github.com/Tatsubooom/sheepbutler/internal/config"
 	"github.com/Tatsubooom/sheepbutler/internal/model"
 	"github.com/Tatsubooom/sheepbutler/internal/notify"
+	"github.com/Tatsubooom/sheepbutler/internal/selection"
 )
 
 // Store は通知に必要な保存先の操作。
@@ -34,6 +35,11 @@ type Store interface {
 	SetLastDigest(ctx context.Context, slot time.Time) error
 }
 
+// Selection は選考状況をまとめる。nil なら選考状況の欄を省く。
+type Selection interface {
+	Overview(ctx context.Context, since time.Time) (selection.Overview, error)
+}
+
 // Calendar は予定を読む。nil なら予定の欄を省く。
 type Calendar interface {
 	Events(ctx context.Context, from, to time.Time) ([]calendar.Event, error)
@@ -43,6 +49,7 @@ type Dispatcher struct {
 	Store     Store
 	Notifier  notify.Notifier
 	Calendar  Calendar
+	Selection Selection
 	Config    config.Config
 	Loc       *time.Location
 	Retention time.Duration          // 送信記録の保存期間
@@ -285,6 +292,13 @@ func (d *Dispatcher) SendDigestIfDue(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	in.RecordedCount = len(recorded)
+	if d.Selection != nil {
+		if o, err := d.Selection.Overview(ctx, last); err != nil {
+			d.Log.Warn("選考状況を取得できません", "err", err)
+		} else {
+			in.Selection = &o
+		}
+	}
 
 	if err := d.send(ctx, kindDigest, formatDigest(in, now, d.Loc), ids(in.Items)); err != nil {
 		return false, err

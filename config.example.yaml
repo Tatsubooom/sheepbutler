@@ -27,6 +27,7 @@ jobhunt:
   profile: "自社開発の Web/インフラ系に興味。Go やクラウドを使う企業。"
   companies:               # interest: S / A / B / C / none（none は興味なし）
     - { name: "株式会社〇〇", aliases: ["〇〇"], interest: S }
+  stale_after_days: 10     # 書類・面接の段階でこの日数連絡が無ければ、まとめ報告で知らせる
   keywords:                # 件名・本文に含まれていれば興味度をこの値以上にする
     インターン: 0.6
     早期選考: 0.9

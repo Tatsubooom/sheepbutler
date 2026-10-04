@@ -9,6 +9,7 @@ import (
 
 	"github.com/Tatsubooom/sheepbutler/internal/calendar"
 	"github.com/Tatsubooom/sheepbutler/internal/model"
+	"github.com/Tatsubooom/sheepbutler/internal/selection"
 )
 
 var weekdays = []string{"日", "月", "火", "水", "木", "金", "土"}
@@ -83,6 +84,9 @@ func formatUrgent(m *model.Message, now time.Time, loc *time.Location, link stri
 	if dl, ok := deadlineOf(m); ok && dl.After(now) {
 		fmt.Fprintf(&b, "締切: %s（%s）\n", clock(dl, loc), remaining(dl.Sub(now)))
 	}
+	if m.SelectionChange != "" {
+		fmt.Fprintf(&b, "選考: %s\n", m.SelectionChange)
+	}
 	if m.Triage != nil && len(m.Triage.Reasons) > 0 {
 		fmt.Fprintf(&b, "理由: %s\n", strings.Join(m.Triage.Reasons, "・"))
 	}
@@ -114,6 +118,7 @@ type digestInput struct {
 	Items         []*model.Message // まとめ待ちのメール
 	RecordedCount int              // 記録のみにしたメールの件数
 	MaxItems      int
+	Selection     *selection.Overview // 選考状況（nil なら欄を省く）
 }
 
 // formatDigest はまとめ報告の本文を作る。
@@ -160,6 +165,8 @@ func formatDigest(in digestInput, now time.Time, loc *time.Location) string {
 		}
 	}
 
+	writeSelection(&b, in.Selection, now, loc)
+
 	if len(in.Items) > 0 {
 		sort.SliceStable(in.Items, func(i, j int) bool { return score(in.Items[i]) > score(in.Items[j]) })
 		fmt.Fprintf(&b, "\n📬 確認してほしいメール（%d通）\n", len(in.Items))
@@ -189,6 +196,38 @@ func formatDigest(in digestInput, now time.Time, loc *time.Location) string {
 		fmt.Fprintf(&b, "\n🗂 記録のみ: %d通（広告や通知など）\n", in.RecordedCount)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// writeSelection は選考状況の欄を書く。選考中・変化・要確認・連絡なしのどれも無ければ省く。
+func writeSelection(b *strings.Builder, o *selection.Overview, now time.Time, loc *time.Location) {
+	if o == nil || len(o.Active)+len(o.Changed)+len(o.Review)+len(o.Stale) == 0 {
+		return
+	}
+	b.WriteString("\n📋 選考状況\n")
+	for _, c := range o.Changed {
+		fmt.Fprintf(b, "🆕 %s %s\n", oneLine(c.Name, 30), c.LastChange)
+	}
+	for _, c := range o.Review {
+		note := "メールの判定だけで更新したので確認してください"
+		if c.NeedsReview && c.ReviewNote != "" {
+			note = c.ReviewNote
+		}
+		fmt.Fprintf(b, "❓ %s %s — %s\n", oneLine(c.Name, 30), c.Label(), note)
+	}
+	for _, c := range o.Active {
+		line := fmt.Sprintf("• %s %s", oneLine(c.Name, 30), c.Label())
+		if c.NextAction.Label != "" {
+			line += "｜次: " + c.NextAction.Label
+			if !c.NextAction.Due.IsZero() && c.NextAction.Due.After(now) {
+				line += "（" + clock(c.NextAction.Due, loc) + "まで）"
+			}
+		}
+		b.WriteString(line + "\n")
+	}
+	for _, c := range o.Stale {
+		days := int(now.Sub(c.LastContactAt).Hours() / 24)
+		fmt.Fprintf(b, "⌛ %s %s — %d日間連絡がありません\n", oneLine(c.Name, 30), c.Label(), days)
+	}
 }
 
 func score(m *model.Message) float64 {
