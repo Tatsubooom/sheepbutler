@@ -14,9 +14,11 @@ const (
 // Message は messages/{gmailId} に保存するメール1通分の記録。
 // 本文は保存しない。判定に必要な部分は M2 で都度 Gmail から取得する。
 type Message struct {
-	ID         string        `firestore:"-"`
-	ThreadID   string        `firestore:"threadId"`
-	ReceivedAt time.Time     `firestore:"receivedAt"`
+	ID         string    `firestore:"-"`
+	ThreadID   string    `firestore:"threadId"`
+	ReceivedAt time.Time `firestore:"receivedAt"`
+	// Source は転送元アカウントのラベル（MAIL_SOURCES で定義。判別できなければ「不明」）。
+	Source     string        `firestore:"source"`
 	From       string        `firestore:"from"`
 	To         string        `firestore:"to"`
 	Subject    string        `firestore:"subject"`
@@ -26,6 +28,9 @@ type Message struct {
 	IngestedAt time.Time     `firestore:"ingestedAt"`
 	// ExpiresAt を過ぎると Firestore の TTL ポリシーで自動削除される。
 	ExpiresAt time.Time `firestore:"expiresAt"`
+
+	// Headers は転送元の判別に使う生のヘッダー。保存はしない。
+	Headers map[string][]string `firestore:"-"`
 }
 
 // GmailState は state/gmail に保存する同期の状態。

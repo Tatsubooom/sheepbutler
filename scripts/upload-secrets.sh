@@ -11,8 +11,13 @@ cd "$(dirname "$0")/.."
 # .env から1つの値だけを取り出す（シェルに読み込むと他の値まで環境に漏れるため source しない）。
 env_value() { grep -E "^$1=" .env | head -1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//'; }
 
-put() { # put <secret名> : 標準入力の内容を登録
+put() { # put <secret名> : 標準入力の内容を登録し、古いバージョンを破棄する
   gcloud secrets versions add "$1" --project="$PROJECT_ID" --data-file=- >/dev/null
+  # 有効なバージョンの無料枠（請求先アカウント全体で 6 個）を超えないよう、最新以外は破棄する。
+  gcloud secrets versions list "$1" --project="$PROJECT_ID" --filter="state=ENABLED" \
+    --sort-by=~createTime --format="value(name)" | tail -n +2 | while read -r v; do
+      gcloud secrets versions destroy "${v##*/}" --secret="$1" --project="$PROJECT_ID" --quiet >/dev/null
+    done
   echo "   $1 を登録しました"
 }
 
