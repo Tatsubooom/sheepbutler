@@ -1,0 +1,8 @@
+# gcloud run deploy --source でアップロードしないもの（.dockerignore と同じ方針）
+.env
+.secrets/
+bin/
+graft/
+.git/
+.claude/
+docs/
