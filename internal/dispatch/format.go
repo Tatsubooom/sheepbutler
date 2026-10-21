@@ -247,3 +247,9 @@ func sortByDeadline(ms []*model.Message) {
 		return a.Before(b)
 	})
 }
+
+// Clock・Remaining・Title・DeadlineOf は、チャットの応答で通知と同じ書式を使うために公開する。
+func Clock(t time.Time, loc *time.Location) string  { return clock(t, loc) }
+func Remaining(d time.Duration) string              { return remaining(d) }
+func Title(m *model.Message) string                 { return title(m) }
+func DeadlineOf(m *model.Message) (time.Time, bool) { return deadlineOf(m) }

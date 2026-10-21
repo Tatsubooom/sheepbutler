@@ -14,6 +14,7 @@ import (
 	"github.com/Tatsubooom/sheepbutler/internal/config"
 	"github.com/Tatsubooom/sheepbutler/internal/llm"
 	"github.com/Tatsubooom/sheepbutler/internal/model"
+	"github.com/Tatsubooom/sheepbutler/internal/notify"
 	"github.com/Tatsubooom/sheepbutler/internal/selection"
 )
 
@@ -23,7 +24,10 @@ type fakeStore struct {
 	msgs          map[string]*model.Message
 	notifications []model.Notification
 	lastDigest    time.Time
+	pausedUntil   time.Time
 }
+
+func (s *fakeStore) PausedUntil(context.Context) (time.Time, error) { return s.pausedUntil, nil }
 
 func newStore(ms ...*model.Message) *fakeStore {
 	s := &fakeStore{msgs: map[string]*model.Message{}}
@@ -90,9 +94,15 @@ func sortedKeys(m map[string]*model.Message) []string {
 }
 
 type fakeNotifier struct {
-	name string
-	sent []string
-	err  error
+	name    string
+	sent    []string
+	buttons [][]notify.Button
+	err     error
+}
+
+func (f *fakeNotifier) SendButtons(ctx context.Context, text string, b []notify.Button) error {
+	f.buttons = append(f.buttons, b)
+	return f.Send(ctx, text)
 }
 
 func (f *fakeNotifier) Name() string { return f.name }
@@ -352,5 +362,34 @@ func TestUrgentShowsSelectionChange(t *testing.T) {
 	m.SelectionChange = "A社 書類・検査 → 面接（1次）"
 	if !strings.Contains(formatUrgent(m, at(4, 12, 0), jst, ""), "選考: A社 書類・検査 → 面接（1次）") {
 		t.Fatal("即時通知に選考状況の変化を書き添える")
+	}
+}
+
+func TestPauseStopsEverything(t *testing.T) {
+	s := newStore(urgentMsg("a"))
+	s.pausedUntil = at(5, 12, 0)
+	n := &fakeNotifier{name: "Discord"}
+	d := newDispatcher(s, n, at(5, 7, 0)) // まとめ報告の時刻だが一時停止中
+	if err := d.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.sent) != 0 || s.msgs["a"].Notify != model.NotifyDigest {
+		t.Fatalf("一時停止中は送らず、即時通知はまとめ報告待ちに回す: sent=%d notify=%s", len(n.sent), s.msgs["a"].Notify)
+	}
+}
+
+func TestSelectionButtons(t *testing.T) {
+	m := urgentMsg("m1")
+	m.SelectionKind = "tentative"
+	s, n := newStore(m), &fakeNotifier{name: "Discord"}
+	newDispatcher(s, n, at(4, 12, 0)).SendUrgent(context.Background())
+	if len(n.buttons) != 1 || len(n.buttons[0]) != 2 || n.buttons[0][0].CustomID != "sel:confirm:m1" || n.buttons[0][1].CustomID != "sel:undo:m1" {
+		t.Fatalf("確認待ちには確定と取り消すのボタン: %+v", n.buttons)
+	}
+	if got := selectionButtons(&model.Message{ID: "x", SelectionKind: "auto"}); len(got) != 1 || got[0].Label != "取り消す" {
+		t.Fatalf("自動更新には取り消すだけ: %+v", got)
+	}
+	if got := selectionButtons(&model.Message{ID: "x"}); got != nil {
+		t.Fatal("選考状況に関係ないメールにはボタンを付けない")
 	}
 }
