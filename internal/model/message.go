@@ -122,6 +122,10 @@ type Message struct {
 	Reminded []int `firestore:"reminded"`
 	// SelectionChange はこのメールによる選考状況の変化（例: "○○社 書類・検査 → 面接（1次）"）。
 	SelectionChange string `firestore:"selectionChange"`
+	// SelectionCompanyID は変化のあった企業。SelectionKind は変化の種類（auto / tentative / review）。
+	// 即時通知に「確定」「取り消す」のボタンを付けるために使う。
+	SelectionCompanyID string `firestore:"selectionCompanyId"`
+	SelectionKind      string `firestore:"selectionKind"`
 
 	// Headers は転送元の判別に使う生のヘッダー。保存はしない。
 	Headers map[string][]string `firestore:"-"`

@@ -76,6 +76,36 @@ type Company struct {
 	LastChange string    `firestore:"lastChange"`
 	ChangedAt  time.Time `firestore:"changedAt"`
 	CreatedAt  time.Time `firestore:"createdAt"`
+	// LastHistoryID は最後に状態を変えた履歴の ID。取り消しは最新の変化に対してだけ行える。
+	LastHistoryID string `firestore:"lastHistoryId"`
+}
+
+// Snapshot は取り消しのために保存する、変化の前の状態。
+type Snapshot struct {
+	Stage       Stage      `firestore:"stage"`
+	Round       int        `firestore:"round"`
+	NextAction  NextAction `firestore:"nextAction"`
+	Unconfirmed bool       `firestore:"unconfirmed"`
+	NeedsReview bool       `firestore:"needsReview"`
+	ReviewNote  string     `firestore:"reviewNote"`
+}
+
+// Snapshot は今の状態を写し取る。
+func (c *Company) Snapshot() Snapshot {
+	return Snapshot{Stage: c.Stage, Round: c.Round, NextAction: c.NextAction,
+		Unconfirmed: c.Unconfirmed, NeedsReview: c.NeedsReview, ReviewNote: c.ReviewNote}
+}
+
+// Label は写し取った状態の表示用の名前。
+func (s Snapshot) Label() string {
+	c := Company{Stage: s.Stage, Round: s.Round, Unconfirmed: s.Unconfirmed}
+	return c.Label()
+}
+
+// Restore は写し取った状態に戻す。
+func (c *Company) Restore(s Snapshot) {
+	c.Stage, c.Round, c.NextAction = s.Stage, s.Round, s.NextAction
+	c.Unconfirmed, c.NeedsReview, c.ReviewNote = s.Unconfirmed, s.NeedsReview, s.ReviewNote
 }
 
 // Label は現在の段階の表示用の名前。
@@ -95,5 +125,6 @@ type History struct {
 	Event     string    `firestore:"event"`
 	From      string    `firestore:"from"`
 	To        string    `firestore:"to"`
-	By        string    `firestore:"by"` // auto / tentative / review / manual
+	By        string    `firestore:"by"`     // auto / tentative / review / confirm / undo / manual
+	Before    Snapshot  `firestore:"before"` // 取り消し用の変化前の状態
 }

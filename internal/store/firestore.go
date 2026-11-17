@@ -411,7 +411,66 @@ func (f *Firestore) ListCompanies(ctx context.Context) ([]*model.Company, error)
 }
 
 // SetSelectionChange はメールに選考状況の変化を書き添える。
-func (f *Firestore) SetSelectionChange(ctx context.Context, messageID, text string) error {
-	_, err := f.c.Collection(colMessages).Doc(messageID).Update(ctx, []firestore.Update{{Path: "selectionChange", Value: text}})
+func (f *Firestore) SetSelectionChange(ctx context.Context, messageID, text, companyID, kind string) error {
+	_, err := f.c.Collection(colMessages).Doc(messageID).Update(ctx, []firestore.Update{
+		{Path: "selectionChange", Value: text},
+		{Path: "selectionCompanyId", Value: companyID},
+		{Path: "selectionKind", Value: kind},
+	})
+	return err
+}
+
+// GetHistory は変化の記録を返す。無ければ nil。
+func (f *Firestore) GetHistory(ctx context.Context, companyID, historyID string) (*model.History, error) {
+	snap, err := f.c.Collection(colCompanies).Doc(companyID).Collection(colHistory).Doc(historyID).Get(ctx)
+	if status.Code(err) == codes.NotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var h model.History
+	return &h, snap.DataTo(&h)
+}
+
+// GetMessage はメールを返す。無ければ nil。
+func (f *Firestore) GetMessage(ctx context.Context, id string) (*model.Message, error) {
+	snap, err := f.c.Collection(colMessages).Doc(id).Get(ctx)
+	if status.Code(err) == codes.NotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var m model.Message
+	if err := snap.DataTo(&m); err != nil {
+		return nil, err
+	}
+	m.ID = id
+	return &m, nil
+}
+
+const docPause = "pause"
+
+// PausedUntil は通知を止めている期限を返す。止めていなければゼロ値。
+func (f *Firestore) PausedUntil(ctx context.Context) (time.Time, error) {
+	snap, err := f.c.Collection(colState).Doc(docPause).Get(ctx)
+	if status.Code(err) == codes.NotFound {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	v, err := snap.DataAt("until")
+	if err != nil {
+		return time.Time{}, nil
+	}
+	t, _ := v.(time.Time)
+	return t, nil
+}
+
+// SetPausedUntil は通知を止める期限を設定する。ゼロ値なら再開する。
+func (f *Firestore) SetPausedUntil(ctx context.Context, until time.Time) error {
+	_, err := f.c.Collection(colState).Doc(docPause).Set(ctx, map[string]any{"until": until, "updatedAt": time.Now()})
 	return err
 }

@@ -18,8 +18,7 @@ const discordMax = 2000
 
 // Send は text を送る。上限を超える場合は複数のメッセージに分けて送る。
 func (d *Discord) Send(ctx context.Context, text string) error {
-	h := http.Header{}
-	h.Set("Authorization", "Bot "+d.BotToken)
+	h := d.header()
 	for _, chunk := range Split(text, discordMax) {
 		// メール由来の文字列に @everyone などが含まれても通知が飛ばないよう、allowed_mentions を空にする。
 		body := map[string]any{
@@ -31,4 +30,10 @@ func (d *Discord) Send(ctx context.Context, text string) error {
 		}
 	}
 	return nil
+}
+
+func (d *Discord) header() http.Header {
+	h := http.Header{}
+	h.Set("Authorization", "Bot "+d.BotToken)
+	return h
 }

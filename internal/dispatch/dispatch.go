@@ -33,6 +33,8 @@ type Store interface {
 	AddNotification(ctx context.Context, n model.Notification) error
 	LastDigest(ctx context.Context) (time.Time, error)
 	SetLastDigest(ctx context.Context, slot time.Time) error
+	// PausedUntil は /pause で通知を止めている期限（止めていなければゼロ値）。
+	PausedUntil(ctx context.Context) (time.Time, error)
 }
 
 // Selection は選考状況をまとめる。nil なら選考状況の欄を省く。
@@ -76,8 +78,23 @@ func (d *Dispatcher) now() time.Time {
 	return time.Now().In(d.Loc)
 }
 
+// paused は /pause で通知を止めている間かを返す。
+func (d *Dispatcher) paused(ctx context.Context) bool {
+	until, err := d.Store.PausedUntil(ctx)
+	if err != nil {
+		d.Log.Warn("一時停止の状態を確認できません", "err", err)
+		return false
+	}
+	return d.now().Before(until)
+}
+
 // Tick は即時通知・リマインド・まとめ報告を順に処理する。1つが失敗しても残りは続ける。
+// 一時停止中は何も送らない（即時通知はまとめ報告待ちに回り、再開後の報告に載る）。
 func (d *Dispatcher) Tick(ctx context.Context) error {
+	if d.paused(ctx) {
+		_, err := d.SendUrgent(ctx)
+		return err
+	}
 	_, errU := d.SendUrgent(ctx)
 	errR := d.SendReminders(ctx)
 	_, errD := d.SendDigestIfDue(ctx)
@@ -117,6 +134,9 @@ func (d *Dispatcher) SendUrgent(ctx context.Context) (int, error) {
 	if d.inQuiet(now) {
 		return 0, defer_(msgs, "通知しない時間帯")
 	}
+	if d.paused(ctx) {
+		return 0, defer_(msgs, "一時停止中")
+	}
 
 	recent, err := d.Store.ListNotificationsSince(ctx, startOfMonth(now))
 	if err != nil {
@@ -149,7 +169,7 @@ func (d *Dispatcher) SendUrgent(ctx context.Context) (int, error) {
 		if d.Link != nil {
 			link = d.Link(m.ID)
 		}
-		if err := d.send(ctx, kindUrgent, formatUrgent(m, now, d.Loc, link), []string{m.ID}); err != nil {
+		if err := d.send(ctx, kindUrgent, formatUrgent(m, now, d.Loc, link), []string{m.ID}, selectionButtons(m)...); err != nil {
 			return sent, err // 状態は urgent のまま。次の Tick で再送する
 		}
 		if err := d.Store.SetNotify(ctx, []string{m.ID}, model.NotifyDone, now); err != nil {
@@ -313,8 +333,14 @@ func (d *Dispatcher) SendDigestIfDue(ctx context.Context) (bool, error) {
 	return true, d.Store.SetNotify(ctx, ids(recorded), model.NotifyDone, now)
 }
 
-func (d *Dispatcher) send(ctx context.Context, kind, text string, msgIDs []string) error {
-	if err := d.Notifier.Send(ctx, text); err != nil {
+func (d *Dispatcher) send(ctx context.Context, kind, text string, msgIDs []string, buttons ...notify.Button) error {
+	var err error
+	if bs, ok := d.Notifier.(notify.ButtonSender); ok && len(buttons) > 0 {
+		err = bs.SendButtons(ctx, text, buttons)
+	} else {
+		err = d.Notifier.Send(ctx, text)
+	}
+	if err != nil {
 		return fmt.Errorf("%s への送信（%s）: %w", d.Notifier.Name(), kind, err)
 	}
 	now := d.now()
@@ -324,6 +350,22 @@ func (d *Dispatcher) send(ctx context.Context, kind, text string, msgIDs []strin
 		d.Log.Error("送信記録の保存に失敗", "err", err)
 	}
 	d.Log.Info("通知しました", "kind", kind, "channel", d.Notifier.Name(), "messages", len(msgIDs))
+	return nil
+}
+
+// selectionButtons は選考状況を変えたメールの通知に付けるボタン。custom_id は "sel:<操作>:<メールID>"。
+func selectionButtons(m *model.Message) []notify.Button {
+	confirm := notify.Button{Label: "確定", CustomID: "sel:confirm:" + m.ID, Style: 3}
+	undo := notify.Button{Label: "取り消す", CustomID: "sel:undo:" + m.ID, Style: 2}
+	switch m.SelectionKind {
+	case "tentative":
+		return []notify.Button{confirm, undo}
+	case "auto":
+		return []notify.Button{undo}
+	case "review":
+		confirm.Label = "確認した"
+		return []notify.Button{confirm}
+	}
 	return nil
 }
 

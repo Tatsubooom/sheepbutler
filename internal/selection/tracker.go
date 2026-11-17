@@ -2,6 +2,8 @@ package selection
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -20,8 +22,10 @@ type Store interface {
 	// 同じメールの記録が既にあれば何もせず false を返す（二重更新の防止）。
 	SaveCompany(ctx context.Context, c *model.Company, h model.History) (bool, error)
 	ListCompanies(ctx context.Context) ([]*model.Company, error)
-	// SetSelectionChange はメールに選考状況の変化を書き添える（即時通知に表示する）。
-	SetSelectionChange(ctx context.Context, messageID, text string) error
+	// GetHistory は変化の記録を返す。無ければ nil。
+	GetHistory(ctx context.Context, companyID, historyID string) (*model.History, error)
+	// SetSelectionChange はメールに選考状況の変化を書き添える（即時通知に表示し、ボタンを付ける）。
+	SetSelectionChange(ctx context.Context, messageID, text, companyID, kind string) error
 }
 
 type Tracker struct {
@@ -72,7 +76,7 @@ func (t *Tracker) Apply(ctx context.Context, m *model.Message, ex *llm.Extractio
 
 	dl, _ := ex.DeadlineTime()
 	r := Next(c.Stage, c.Round, ex.SelectionEvent, dl)
-	h := model.History{At: now, MessageID: m.ID, Event: string(ex.SelectionEvent), From: c.Label(), By: string(r.Kind)}
+	h := model.History{At: now, MessageID: m.ID, Event: string(ex.SelectionEvent), From: c.Label(), By: string(r.Kind), Before: c.Snapshot()}
 	if m.ReceivedAt.After(c.LastContactAt) {
 		c.LastContactAt = m.ReceivedAt
 	}
@@ -96,7 +100,7 @@ func (t *Tracker) Apply(ctx context.Context, m *model.Message, ex *llm.Extractio
 		}
 	}
 	if change != "" {
-		c.LastChange, c.ChangedAt = change, now
+		c.LastChange, c.ChangedAt, c.LastHistoryID = change, now, m.ID
 	}
 	h.To = c.Label()
 
@@ -107,7 +111,56 @@ func (t *Tracker) Apply(ctx context.Context, m *model.Message, ex *llm.Extractio
 	if t.Log != nil {
 		t.Log.Info("選考状況を更新しました", "company", c.ID, "kind", r.Kind, "to", c.Stage, "round", c.Round)
 	}
-	return t.Store.SetSelectionChange(ctx, m.ID, name+" "+change)
+	return t.Store.SetSelectionChange(ctx, m.ID, name+" "+change, c.ID, string(r.Kind))
+}
+
+// ErrNotLatest は、取り消そうとした変化の後に別の変化があったことを示す。
+var ErrNotLatest = errors.New("この後に別の更新があるため取り消せません")
+
+// Confirm は確認待ち（内定？・不合格？）や要確認を確定する。historyID は変化を起こしたメールの ID。
+// 処理済みなら false を返す。
+func (t *Tracker) Confirm(ctx context.Context, companyID, historyID string) (*model.Company, bool, error) {
+	c, err := t.Store.GetCompany(ctx, companyID)
+	if err != nil || c == nil {
+		return nil, false, notFound(err, companyID)
+	}
+	before := c.Snapshot()
+	c.Unconfirmed, c.NeedsReview, c.ReviewNote = false, false, ""
+	c.LastChange, c.ChangedAt = "確定: "+c.Label(), t.now()
+	h := model.History{At: t.now(), MessageID: historyID + "-confirm", From: before.Label(), To: c.Label(), By: "confirm", Before: before}
+	ok, err := t.Store.SaveCompany(ctx, c, h)
+	return c, ok, err
+}
+
+// Undo は historyID の変化を取り消し、変化の前の状態に戻す。最新の変化だけを取り消せる。
+func (t *Tracker) Undo(ctx context.Context, companyID, historyID string) (*model.Company, bool, error) {
+	c, err := t.Store.GetCompany(ctx, companyID)
+	if err != nil || c == nil {
+		return nil, false, notFound(err, companyID)
+	}
+	if c.LastHistoryID == historyID+"-undo" {
+		return c, false, nil // 取り消し済み
+	}
+	if c.LastHistoryID != historyID {
+		return c, false, ErrNotLatest
+	}
+	h0, err := t.Store.GetHistory(ctx, companyID, historyID)
+	if err != nil || h0 == nil {
+		return nil, false, notFound(err, companyID+"/"+historyID)
+	}
+	from := c.Label()
+	c.Restore(h0.Before)
+	c.LastChange, c.ChangedAt, c.LastHistoryID = "取り消し: "+from+" → "+c.Label(), t.now(), historyID+"-undo"
+	h := model.History{At: t.now(), MessageID: historyID + "-undo", From: from, To: c.Label(), By: "undo"}
+	ok, err := t.Store.SaveCompany(ctx, c, h)
+	return c, ok, err
+}
+
+func notFound(err error, what string) error {
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("%s が見つかりません", what)
 }
 
 // Overview はまとめ報告に載せる選考状況。

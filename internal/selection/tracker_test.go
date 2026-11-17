@@ -44,9 +44,15 @@ func (f *fakeStore) ListCompanies(context.Context) ([]*model.Company, error) {
 	}
 	return out, nil
 }
-func (f *fakeStore) SetSelectionChange(_ context.Context, id, text string) error {
+func (f *fakeStore) SetSelectionChange(_ context.Context, id, text, _, _ string) error {
 	f.changes[id] = text
 	return nil
+}
+func (f *fakeStore) GetHistory(_ context.Context, companyID, historyID string) (*model.History, error) {
+	if h, ok := f.history[companyID+"/"+historyID]; ok {
+		return &h, nil
+	}
+	return nil, nil
 }
 
 var now = time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
@@ -145,4 +151,38 @@ func names(cs []*model.Company) []string {
 		out = append(out, c.Name)
 	}
 	return out
+}
+
+func TestConfirmAndUndo(t *testing.T) {
+	st := newFakeStore()
+	tr := newTracker(st)
+	ctx := context.Background()
+	id := CompanyID("株式会社第一志望")
+
+	tr.Apply(ctx, mail("m1"), sel("第一志望", llm.EventInterviewScheduling))
+	tr.Apply(ctx, mail("m2"), sel("第一志望", llm.EventResultFail))
+	if st.companies[id].Label() != "不合格？" {
+		t.Fatalf("前提: %s", st.companies[id].Label())
+	}
+
+	// 不合格は誤判定だったので取り消す → 面接（1次）に戻る
+	c, ok, err := tr.Undo(ctx, id, "m2")
+	if err != nil || !ok || c.Label() != "面接（1次）" || c.Unconfirmed {
+		t.Fatalf("取り消し: %v %v %+v", ok, err, c)
+	}
+	if _, ok, _ := tr.Undo(ctx, id, "m2"); ok {
+		t.Fatal("2回押しても二重に取り消さない")
+	}
+	if _, _, err := tr.Undo(ctx, id, "m1"); err != ErrNotLatest {
+		t.Fatalf("最新でない変化は取り消せない: %v", err)
+	}
+
+	tr.Apply(ctx, mail("m3"), sel("第一志望", llm.EventOffer))
+	c, ok, err = tr.Confirm(ctx, id, "m3")
+	if err != nil || !ok || c.Label() != "内定" || c.Unconfirmed {
+		t.Fatalf("確定: %v %v %+v", ok, err, c)
+	}
+	if _, ok, _ := tr.Confirm(ctx, id, "m3"); ok {
+		t.Fatal("2回押しても二重に確定しない")
+	}
 }

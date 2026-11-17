@@ -142,6 +142,9 @@ rm -f "$POLICY"
 # 予算の監視と自動停止（ガード）も同時に更新する。
 ./scripts/deploy-guard.sh
 
+# Discord のスラッシュコマンドとボタン（チャット）も同時に更新する。
+./scripts/deploy-chat.sh
+
 cat <<EOF
 
 デプロイしました。動作確認:
