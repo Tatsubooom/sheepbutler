@@ -14,6 +14,7 @@ SERVICE="${SERVICE:-sheepbutler}"
 CHAT_SERVICE="${CHAT_SERVICE:-sheepbutler-chat}"
 CHAT_NAME="sheepbutler-chat"
 CHAT_SA="$CHAT_NAME@$PROJECT_ID.iam.gserviceaccount.com"
+CHAT_TOPIC="${CHAT_TOPIC:-chat-jobs}"
 
 cd "$(dirname "$0")/.."
 env_value() { local v="${!1:-}"; [ -n "$v" ] && { echo "$v"; return; }; grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- || true; }
@@ -38,6 +39,8 @@ fi
 # 選考状況・一時停止の読み書き（Firestore）と、予定の読み取りに必要な秘密情報だけを与える。
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$CHAT_SA" \
   --role=roles/datastore.user --condition=None >/dev/null
+# /ask の質問を本体に渡すトピックへの発行だけを許す（トピックは scripts/deploy.sh が作る）。
+gcloud pubsub topics add-iam-policy-binding "$CHAT_TOPIC" --member="serviceAccount:$CHAT_SA" --role=roles/pubsub.publisher >/dev/null
 SECRETS_ARG=""
 for pair in "GOOGLE_OAUTH_CLIENT_JSON=google-oauth-client" "GOOGLE_OAUTH_TOKEN_JSON=google-oauth-token" "/config/config.yaml=app-config"; do
   secret="${pair#*=}"
@@ -47,7 +50,7 @@ for pair in "GOOGLE_OAUTH_CLIENT_JSON=google-oauth-client" "GOOGLE_OAUTH_TOKEN_J
     SECRETS_ARG="${SECRETS_ARG:+$SECRETS_ARG,}$pair:latest"
   fi
 done
-ENV_ARG="GOOGLE_CLOUD_PROJECT=$PROJECT_ID,DISCORD_PUBLIC_KEY=$PUBLIC_KEY,DISCORD_OWNER_ID=$OWNER_ID,GOOGLE_CALENDAR_ID=$(env_value GOOGLE_CALENDAR_ID)"
+ENV_ARG="GOOGLE_CLOUD_PROJECT=$PROJECT_ID,DISCORD_PUBLIC_KEY=$PUBLIC_KEY,DISCORD_OWNER_ID=$OWNER_ID,GOOGLE_CALENDAR_ID=$(env_value GOOGLE_CALENDAR_ID),CHAT_JOBS_TOPIC=projects/$PROJECT_ID/topics/$CHAT_TOPIC"
 case "$SECRETS_ARG" in *app-config*) ENV_ARG="$ENV_ARG,CONFIG_PATH=/config/config.yaml" ;; esac
 
 echo "== チャットを Cloud Run にデプロイ（本体と同じイメージを使う、公開）"
@@ -72,6 +75,7 @@ go run ./cmd/discordsetup register -url "$CHAT_URL/interactions"
 
 cat <<EOF
 
-チャットを設定しました。Discord で /status /deadlines /today /pause /resume が使えます。
+チャットを設定しました。Discord で /status /deadlines /today /pause /resume /ask が使えます。
+/ask で頼んだ変更（選考状況・志望度・設定）は「反映する」ボタンを押したときだけ反映されます。
 選考状況が変わったメールの通知には「確定」「取り消す」のボタンが付きます。
 EOF

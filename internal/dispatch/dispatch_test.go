@@ -146,7 +146,7 @@ func TestSendUrgent(t *testing.T) {
 	if s.msgs["a"].Notify != model.NotifyDone || len(s.notifications) != 1 {
 		t.Fatalf("送ったら済みにして記録する: %+v", s.msgs["a"])
 	}
-	for _, want := range []string{"🔴 即時｜一次面接の日程調整", "人事（大学）", "10/06(火) 23:59（あと2日）", "選考の個別連絡", "https://mail.example/a"} {
+	for _, want := range []string{"🔴 一次面接の日程調整\n人事｜締切 10/06(火) 23:59（あと2日）", "https://mail.example/a"} {
 		if !strings.Contains(n.sent[0], want) {
 			t.Errorf("本文に %q が無い:\n%s", want, n.sent[0])
 		}
@@ -258,7 +258,7 @@ func TestSendDigest(t *testing.T) {
 	}
 	body := n.sent[0]
 	for _, want := range []string{"🐑 まとめ報告（10/05 朝）", "今日の予定（10/05 月）", "09:00〜10:30 情報理論", "終日 学園祭",
-		"近い締切", "10/06(火) 23:59", "確認してほしいメール（3通）", "記録のみ: 1通"} {
+		"近い締切", "10/06(火) 23:59", "確認してほしいメール（2通）", "記録のみ: 1通"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("本文に %q が無い:\n%s", want, body)
 		}

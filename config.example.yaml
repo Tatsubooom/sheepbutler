@@ -7,7 +7,8 @@ triage:
   # 必要度 = deadline × 期限 + importance × 重要度 + interest × 興味度
   weights: { deadline: 0.4, importance: 0.25, interest: 0.35 }
   # 必要度が urgent 以上なら即時、digest 以上ならまとめ報告、それ未満は記録のみ
-  thresholds: { urgent: 0.7, digest: 0.3 }
+  # bulk_digest: 一斉配信（広告・スカウトの一斉送信）はこの値以上のときだけまとめ報告に載せる。一斉配信は即時にしない
+  thresholds: { urgent: 0.7, digest: 0.4, bulk_digest: 0.5 }
   deadline_steps:          # 締切までの残り時間 → 期限の点数
     - { within_hours: 24,  score: 1.0 }
     - { within_hours: 72,  score: 0.7 }
@@ -17,6 +18,8 @@ triage:
   marker_score: 0.7        # 目印があれば重要度をこの値以上にする
   bulk_discount: 0.5       # 一斉配信（ナビサイトの広告など）の重要度に掛ける係数
   phishing_tier: digest    # 詐欺の疑いがあるメールの最低の段階（urgent / digest / record）。誤検知があるので初期値は digest
+  # true なら、返信・申込などの対応が要らないメールや、志望企業以外の説明会の案内は即時にせずまとめ報告に回す
+  urgent_needs_action: true
   exclude:                 # 当たるメールは LLM に送らず「記録のみ」
     senders: []            # 例: ["grades@example.ac.jp"]
     subject_keywords: []   # 例: ["成績", "健康診断"]

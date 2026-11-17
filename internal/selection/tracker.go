@@ -205,3 +205,39 @@ func (t *Tracker) Overview(ctx context.Context, since time.Time) (Overview, erro
 	})
 	return o, nil
 }
+
+// SetManual は利用者の指示で企業の段階を変える（例: 辞退にする）。historyID は変化の記録の ID（二重適用の防止）。
+// 企業が未登録なら作る。
+func (t *Tracker) SetManual(ctx context.Context, name string, stage model.Stage, round int, historyID string) (*model.Company, bool, error) {
+	if _, ok := model.StageOrder[stage]; !ok {
+		return nil, false, fmt.Errorf("段階 %q は使えません", stage)
+	}
+	if co, ok := t.Config.FindCompany(name); ok {
+		name = co.Name
+	}
+	now := t.now()
+	id := CompanyID(name)
+	c, err := t.Store.GetCompany(ctx, id)
+	if err != nil {
+		return nil, false, err
+	}
+	if c == nil {
+		c = &model.Company{ID: id, Name: name, Stage: model.StageInterested, CreatedAt: now}
+	}
+	if stage != model.StageInterview {
+		round = 0
+	} else if round <= 0 {
+		round = 1
+	}
+	before := c.Snapshot()
+	from := c.Label()
+	c.Stage, c.Round = stage, round
+	c.Unconfirmed, c.NeedsReview, c.ReviewNote = false, false, ""
+	if stage.Terminal() {
+		c.NextAction = model.NextAction{}
+	}
+	c.LastChange, c.ChangedAt, c.LastHistoryID = "手動: "+from+" → "+c.Label(), now, historyID
+	h := model.History{At: now, MessageID: historyID, From: from, To: c.Label(), By: "manual", Before: before}
+	ok, err := t.Store.SaveCompany(ctx, c, h)
+	return c, ok, err
+}

@@ -41,6 +41,8 @@ type Triager struct {
 	// AfterTriage は LLM で判定したメールを保存した後に呼ばれる（選考状況の更新に使う）。
 	// 失敗してもログに残すだけで、判定自体は成功とする。
 	AfterTriage func(ctx context.Context, m *model.Message, ex *llm.Extraction) error
+	// Interest はチャットで設定した志望度を返す（config.yaml に無い企業用）。nil なら config.yaml だけを使う。
+	Interest func(ctx context.Context, company string) (string, bool)
 }
 
 func (t *Triager) now() time.Time {
@@ -126,7 +128,7 @@ func (t *Triager) TriageOne(ctx context.Context, m *model.Message) (model.Triage
 		return t.saveRulesOnly(ctx, m, mail, now, "LLM 未使用（判定に繰り返し失敗）")
 	}
 
-	res = Score(t.Config, mail, &ex, now)
+	res = Score(t.configFor(ctx, ex.Company), mail, &ex, now)
 	t.audit(ctx, m.ID, body, usage, res.Tier, nil)
 	if err := t.Store.SaveTriage(ctx, m.ID, &ex, res, true); err != nil {
 		return res, err
@@ -157,4 +159,21 @@ func (t *Triager) audit(ctx context.Context, id, body string, u llm.Usage, tier 
 	if err := t.Store.AddAudit(ctx, a); err != nil {
 		t.Log.Error("監査ログの記録に失敗", "err", err)
 	}
+}
+
+// configFor は、config.yaml に無い企業でもチャットで志望度を設定していれば、それを加えた設定を返す。
+func (t *Triager) configFor(ctx context.Context, company string) config.Config {
+	if t.Interest == nil || company == "" {
+		return t.Config
+	}
+	if _, ok := t.Config.FindCompany(company); ok {
+		return t.Config
+	}
+	level, ok := t.Interest(ctx, company)
+	if !ok {
+		return t.Config
+	}
+	cfg := t.Config
+	cfg.JobHunt.Companies = append(append([]config.Company(nil), t.Config.JobHunt.Companies...), config.Company{Name: company, Interest: level})
+	return cfg
 }

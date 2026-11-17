@@ -69,6 +69,8 @@ type Company struct {
 	// NeedsReview は自動では判断できない変化があった（例: 不合格の後に選考の案内が来た）。
 	NeedsReview bool   `firestore:"needsReview"`
 	ReviewNote  string `firestore:"reviewNote"`
+	// Interest はチャットで設定した志望度（S / A / B / C / none）。空なら config.yaml の値を使う。
+	Interest string `firestore:"interest"`
 	// AutoCreated は config.yaml に無い企業を、選考メールから自動で登録した。
 	AutoCreated   bool      `firestore:"autoCreated"`
 	LastContactAt time.Time `firestore:"lastContactAt"`

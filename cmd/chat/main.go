@@ -65,11 +65,21 @@ func run(log *slog.Logger) error {
 	defer fs.Close()
 
 	h := &chat.Handler{
-		Store:   fs,
-		Tracker: &selection.Tracker{Store: fs, Config: cfg, Log: log},
-		OwnerID: owner,
-		Loc:     jst,
-		Log:     log,
+		Store:     fs,
+		Tracker:   &selection.Tracker{Store: fs, Config: cfg, Log: log},
+		Proposals: fs,
+		Config:    cfg,
+		OwnerID:   owner,
+		Loc:       jst,
+		Log:       log,
+	}
+	// /ask は本体（非公開）に Pub/Sub で渡す。未設定なら /ask だけ使えない。
+	if topic := os.Getenv("CHAT_JOBS_TOPIC"); topic != "" {
+		if h.Publisher, err = chat.NewPubSub(ctx, topic); err != nil {
+			return err
+		}
+	} else {
+		log.Warn("CHAT_JOBS_TOPIC が未設定のため、/ask は使えません")
 	}
 	if id := os.Getenv("GOOGLE_CALENDAR_ID"); id != "" {
 		if hc, err := googleauth.HTTPClientFromEnv(ctx); err != nil {

@@ -474,3 +474,98 @@ func (f *Firestore) SetPausedUntil(ctx context.Context, until time.Time) error {
 	_, err := f.c.Collection(colState).Doc(docPause).Set(ctx, map[string]any{"until": until, "updatedAt": time.Now()})
 	return err
 }
+
+const (
+	colProposals = "proposals"
+	docSettings  = "settings"
+)
+
+// CreateProposal は変更案を保存し、ID を返す。
+func (f *Firestore) CreateProposal(ctx context.Context, p *model.Proposal) (string, error) {
+	ref, _, err := f.c.Collection(colProposals).Add(ctx, p)
+	if err != nil {
+		return "", err
+	}
+	return ref.ID, nil
+}
+
+// GetProposal は変更案を返す。無ければ nil。
+func (f *Firestore) GetProposal(ctx context.Context, id string) (*model.Proposal, error) {
+	snap, err := f.c.Collection(colProposals).Doc(id).Get(ctx)
+	if status.Code(err) == codes.NotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var p model.Proposal
+	if err := snap.DataTo(&p); err != nil {
+		return nil, err
+	}
+	p.ID = id
+	return &p, nil
+}
+
+// TransitionProposal は変更案の状態を from から to に変える。既に from でなければ false を返す（二重押しの防止）。
+func (f *Firestore) TransitionProposal(ctx context.Context, id string, from, to model.ProposalState) (bool, error) {
+	ref := f.c.Collection(colProposals).Doc(id)
+	changed := false
+	err := f.c.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		changed = false
+		snap, err := tx.Get(ref)
+		if err != nil {
+			return err
+		}
+		var p model.Proposal
+		if err := snap.DataTo(&p); err != nil {
+			return err
+		}
+		if p.State != from {
+			return nil
+		}
+		changed = true
+		return tx.Update(ref, []firestore.Update{{Path: "state", Value: string(to)}})
+	})
+	return changed, err
+}
+
+// SettingOverrides はチャットで変更した設定（"項目名" → 値）を返す。
+func (f *Firestore) SettingOverrides(ctx context.Context) (map[string]any, error) {
+	snap, err := f.c.Collection(colState).Doc(docSettings).Get(ctx)
+	if status.Code(err) == codes.NotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	v, err := snap.DataAt("overrides")
+	if err != nil {
+		return nil, nil
+	}
+	m, _ := v.(map[string]any)
+	return m, nil
+}
+
+// SetSettingOverride は設定の上書きを1つ保存する。
+func (f *Firestore) SetSettingOverride(ctx context.Context, key string, value any) error {
+	_, err := f.c.Collection(colState).Doc(docSettings).Set(ctx, map[string]any{
+		"overrides": map[string]any{key: value},
+		"updatedAt": time.Now(),
+	}, firestore.MergeAll)
+	return err
+}
+
+// SetCompanyInterest は企業の志望度を保存する。企業が無ければ「興味あり」で作る。
+func (f *Firestore) SetCompanyInterest(ctx context.Context, id, name, interest string) error {
+	ref := f.c.Collection(colCompanies).Doc(id)
+	return f.c.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		_, err := tx.Get(ref)
+		if status.Code(err) == codes.NotFound {
+			return tx.Set(ref, &model.Company{Name: name, Stage: model.StageInterested, Interest: interest, CreatedAt: time.Now()})
+		}
+		if err != nil {
+			return err
+		}
+		return tx.Update(ref, []firestore.Update{{Path: "interest", Value: interest}})
+	})
+}
