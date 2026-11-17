@@ -1,37 +1,40 @@
 # SheepButler
 
-メール・予定・就活の選考状況を整理し、必要度に応じて Discord か LINE で知らせる個人用の執事アプリ。
-各自が自分の Google Cloud・OAuth クライアント・API キーを用意して動かすセルフホスト型です。
+メール・予定・就活の選考状況を整理し、必要なものだけを Discord（または LINE）で知らせる個人用の執事アプリ。
+各自が自分の Google Cloud・OAuth クライアント・API キーを用意して動かすセルフホスト型です。開発者のサーバーは経由しません。
 
-## 現在の状態
+## できること
 
-M1（メールの取り込み）まで実装済みです。手順は [M0 準備](docs/setup/m0.md)、[M1 メールの取り込み](docs/setup/m1.md) を参照してください。
+- **メールの振り分け**: 複数のアドレスから専用 Gmail に転送したメールを、締切・重要度・興味度で「即時」「まとめ報告」「記録のみ」に振り分ける
+- **即時通知**: 面接の日程調整や締切間近の連絡など、対応が要るものだけをすぐに知らせる（夜間は止める、1時間・1日の上限あり）
+- **まとめ報告**: 朝と夜に、今日（明日）の予定・近い締切・選考状況・確認してほしいメールを1通にまとめる
+- **締切リマインド**: 締切の 72 時間前と 24 時間前に知らせる
+- **選考ステータス管理**: 選考の連絡から企業ごとの段階（エントリー → 書類 → 面接 → 内定）を自動で更新し、ボタンで確定・取り消しできる
+- **チャット**: `/status` `/deadlines` `/today` `/pause` `/resume`、自由に質問できる `/ask`（「B社は辞退した」と頼むと変更案を作り、ボタンを押したときだけ反映する）
 
-| コマンド | 内容 |
-|---|---|
-| `go run ./cmd/authorize` | 専用 Gmail で OAuth の同意を行い、トークンを `.secrets/token.json` に保存する |
-| `go run ./cmd/m0check` | Gmail・転送・カレンダー・Claude API・通知の接続を確認する |
-| `scripts/gcp-setup.sh` | Google Cloud のリソース（API、Firestore、Pub/Sub、Secret Manager）を作る |
-| `scripts/upload-secrets.sh` | ローカルの秘密情報を Secret Manager に登録する |
-| `scripts/deploy.sh` | Cloud Run にデプロイし、Pub/Sub と watch 更新ジョブをつなぐ |
-| `go run ./cmd/server -once sync` | ローカルから1回だけ同期する（確認用） |
+費用は Google Cloud の無料枠の範囲に収まるように作っています（予算を超えそうになると自動で止まります）。Claude API はメール1通あたり約 $0.002、`/ask` は1回あたり約 $0.01 です。
+
+## 導入
+
+[導入手順](docs/setup/README.md) を上から順に進めてください。所要時間は 1〜2 時間です。
+
+- [使い方](docs/usage.md) — 通知の見方、コマンド、振り分けの調整
+- [仕組み](docs/architecture.md) — 構成、データの流れ、安全のための設計
+- [プライバシーポリシー](docs/privacy.md)
 
 ## 構成
 
 ```
-cmd/server          Cloud Run で動く本体（Pub/Sub の受信、watch の更新）
+cmd/server          本体（Cloud Run、非公開）: メールの取り込み・判定・通知・/ask の回答
+cmd/chat            チャット（Cloud Run、公開）: Discord のコマンドとボタンを受け取る
+cmd/guard           予算の監視（Cloud Run、非公開）: 予算を超えそうなら本体を止める
 cmd/authorize       OAuth の認可（ローカルで1回だけ実行）
-cmd/m0check         M0 の接続確認
-internal/envfile    .env の読み込み
-internal/googleauth Google の OAuth 設定とトークン（読み取り専用スコープのみ）
-internal/notify     Discord / LINE への送信
-internal/ingest     Gmail の差分取得と二重処理の防止
-internal/mail       Gmail API（読み取り専用）
-internal/store      Firestore への保存
-internal/model      保存するデータの型
-internal/logx       Cloud Logging 向けのログ
-scripts/            Google Cloud のセットアップ
-docs/setup/         セットアップ手順
+cmd/m0check         接続の確認
+cmd/discordsetup    Discord のコマンドと送り先 URL の登録
+cmd/review          判定結果の確認と、重み・しきい値の調整
+internal/           各機能（ingest 取り込み / triage 判定 / dispatch 通知 / selection 選考状況 / assistant /ask など）
+scripts/            Google Cloud のセットアップとデプロイ
+docs/               導入手順・使い方・仕組み
 ```
 
-秘密情報（`.env`、`.secrets/`）は Git にコミットされません。
+秘密情報（`.env`、`.secrets/`）と個人の設定（`config.yaml`）は Git にコミットされません。
