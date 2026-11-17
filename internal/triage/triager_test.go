@@ -78,7 +78,7 @@ func newTriager(st *fakeStore, l *fakeLLM, body *fakeBody) *Triager {
 
 func TestTriageWithLLM(t *testing.T) {
 	st := newFakeStore(&model.Message{ID: "a", Subject: "面接日程"})
-	l := &fakeLLM{ex: llm.Extraction{MailKind: llm.KindSelection, Importance: 0.8}}
+	l := &fakeLLM{ex: llm.Extraction{MailKind: llm.KindSelection, Importance: 0.8, ActionRequired: true}}
 	sum, err := newTriager(st, l, &fakeBody{}).RunPending(context.Background(), 10)
 	if err != nil {
 		t.Fatal(err)
@@ -149,5 +149,16 @@ func TestAfterTriageHook(t *testing.T) {
 	sum, _ := tr.RunPending(context.Background(), 10)
 	if got == nil || got.Company != "X社" || sum.Processed != 1 {
 		t.Fatalf("判定の後に抽出結果を渡す: got=%v sum=%+v", got, sum)
+	}
+}
+
+func TestInterestFromChat(t *testing.T) {
+	st := newFakeStore(&model.Message{ID: "a", Subject: "説明会のご案内"})
+	l := &fakeLLM{ex: llm.Extraction{MailKind: llm.KindEvent, Company: "チャットで設定した社", Importance: 0.9, InterestEstimate: 0.9}}
+	tr := newTriager(st, l, &fakeBody{})
+	tr.Interest = func(_ context.Context, c string) (string, bool) { return "none", c == "チャットで設定した社" }
+	tr.RunPending(context.Background(), 10)
+	if got := st.saved["a"]; got.Tier != model.TierRecord || got.Interest != 0 {
+		t.Fatalf("チャットで「興味なし」にした企業は記録のみ: %+v", got)
 	}
 }

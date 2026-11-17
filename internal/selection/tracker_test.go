@@ -186,3 +186,25 @@ func TestConfirmAndUndo(t *testing.T) {
 		t.Fatal("2回押しても二重に確定しない")
 	}
 }
+
+func TestSetManual(t *testing.T) {
+	st := newFakeStore()
+	tr := newTracker(st)
+	ctx := context.Background()
+	tr.Apply(ctx, mail("m1"), sel("第一志望", llm.EventInterviewScheduling))
+
+	c, ok, err := tr.SetManual(ctx, "ダイイチ", model.StageDeclined, 0, "prop-1") // 別名でも同じ企業
+	if err != nil || !ok || c.Name != "株式会社第一志望" || c.Label() != "辞退" || c.NextAction.Label != "" {
+		t.Fatalf("%v %v %+v", ok, err, c)
+	}
+	if _, ok, _ := tr.SetManual(ctx, "第一志望", model.StageDeclined, 0, "prop-1"); ok {
+		t.Fatal("同じ変更案を二重に適用しない")
+	}
+	// 手動の変更も取り消せる
+	if c, _, err := tr.Undo(ctx, c.ID, "prop-1"); err != nil || c.Label() != "面接（1次）" {
+		t.Fatalf("%v %+v", err, c)
+	}
+	if _, _, err := tr.SetManual(ctx, "X社", "hired", 0, "prop-2"); err == nil {
+		t.Fatal("知らない段階はエラー")
+	}
+}

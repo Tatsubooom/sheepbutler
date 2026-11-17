@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tatsubooom/sheepbutler/internal/config"
 	"github.com/Tatsubooom/sheepbutler/internal/discord"
 	"github.com/Tatsubooom/sheepbutler/internal/dispatch"
 	"github.com/Tatsubooom/sheepbutler/internal/model"
@@ -32,16 +33,20 @@ type Tracker interface {
 	Overview(ctx context.Context, since time.Time) (selection.Overview, error)
 	Confirm(ctx context.Context, companyID, historyID string) (*model.Company, bool, error)
 	Undo(ctx context.Context, companyID, historyID string) (*model.Company, bool, error)
+	SetManual(ctx context.Context, name string, stage model.Stage, round int, historyID string) (*model.Company, bool, error)
 }
 
 type Handler struct {
-	Store    Store
-	Tracker  Tracker
-	Calendar dispatch.Calendar // nil なら予定は表示しない
-	OwnerID  string            // 操作を許す Discord ユーザー
-	Loc      *time.Location
-	Log      *slog.Logger
-	Now      func() time.Time
+	Store     Store
+	Tracker   Tracker
+	Proposals ProposalStore     // 変更案の反映（/ask で作られたもの）
+	Publisher Publisher         // /ask の質問を本体に渡す
+	Config    config.Config     // 設定の変更案を検証するための元の設定
+	Calendar  dispatch.Calendar // nil なら予定は表示しない
+	OwnerID   string            // 操作を許す Discord ユーザー
+	Loc       *time.Location
+	Log       *slog.Logger
+	Now       func() time.Time
 }
 
 func (h *Handler) now() time.Time {
@@ -79,6 +84,8 @@ func (h *Handler) Handle(ctx context.Context, in discord.Interaction) discord.Re
 			text, err = h.pause(ctx, hours)
 		case "resume":
 			text, err = h.resume(ctx)
+		case "ask":
+			return h.ask(ctx, in)
 		default:
 			text = "知らないコマンドです: /" + in.Data.Name
 		}
@@ -227,6 +234,9 @@ func (h *Handler) resume(ctx context.Context) (string, error) {
 // button は選考状況の「確定」「取り消す」ボタンを処理する。custom_id は "sel:<confirm|undo>:<メールID>"。
 func (h *Handler) button(ctx context.Context, in discord.Interaction) discord.Response {
 	parts := strings.SplitN(in.Data.CustomID, ":", 3)
+	if len(parts) == 3 && parts[0] == "prop" && h.Proposals != nil {
+		return h.proposalButton(ctx, parts[1], parts[2])
+	}
 	if len(parts) != 3 || parts[0] != "sel" {
 		return discord.Message("このボタンは使えません。", true)
 	}

@@ -129,4 +129,7 @@ var Commands = []Command{
 		{Type: 10, Name: "hours", Description: "停止する時間（時間単位、既定 24）"},
 	}},
 	{Name: "resume", Description: "一時停止した通知を再開する"},
+	{Name: "ask", Description: "執事に自由に質問・依頼する（例: 今どこまで進んでる？ / B社は辞退した）", Options: []CommandOption{
+		{Type: 3, Name: "question", Description: "質問や依頼", Required: true},
+	}},
 }

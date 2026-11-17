@@ -5,6 +5,7 @@
 //	POST /pubsub/gmail       Gmail の新着通知（Pub/Sub push）→ 差分を取り込み、必要度を判定する
 //	POST /jobs/renew-watch   Gmail の watch を張り直し、判定し残したメールを判定する（Cloud Scheduler から毎日）
 //	POST /jobs/tick          即時通知・締切リマインド・まとめ報告（Cloud Scheduler から15分おき）
+//	POST /jobs/chat          /ask の質問に答える（チャットのサービスが Pub/Sub 経由で渡す）
 //	GET  /healthz            死活確認
 //
 // ローカルでの確認用に、1回だけ実行して終了するモードもある:
@@ -28,12 +29,14 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata" // distroless イメージにはタイムゾーンのデータが無いため埋め込む
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Tatsubooom/sheepbutler/internal/assistant"
 	"github.com/Tatsubooom/sheepbutler/internal/calendar"
 	"github.com/Tatsubooom/sheepbutler/internal/config"
 	"github.com/Tatsubooom/sheepbutler/internal/dispatch"
@@ -144,15 +147,36 @@ func run(once string, days int, log *slog.Logger) error {
 			Log:       log,
 		},
 	}
+	s.store, s.base = fs, cfg
 	// 選考状況: 判定の直後に更新し、まとめ報告に載せる。
-	tracker := &selection.Tracker{Store: fs, Config: cfg, Log: log}
-	s.triager.AfterTriage = tracker.Apply
+	s.tracker = &selection.Tracker{Store: fs, Config: cfg, Log: log}
+	s.triager.AfterTriage = s.tracker.Apply
+	// チャットで設定した志望度（config.yaml に無い企業）も判定に使う。
+	s.triager.Interest = func(ctx context.Context, company string) (string, bool) {
+		c, err := fs.GetCompany(ctx, selection.CompanyID(company))
+		if err != nil || c == nil || c.Interest == "" {
+			return "", false
+		}
+		return c.Interest, true
+	}
 	if s.dispatcher, err = newDispatcher(ctx, cfg, env, gm, fs, hc, jst, log); err != nil {
 		return err
 	}
 	if s.dispatcher != nil {
-		s.dispatcher.Selection = tracker
+		s.dispatcher.Selection = s.tracker
 	}
+	// /ask の回答。モデルと設定は質問ごとに最新の設定から決める。
+	claude := anthropic.NewClient()
+	s.assistant = &assistant.Assistant{
+		Store: fs, Loc: jst, Log: log,
+		Call: func(ctx context.Context, p anthropic.MessageNewParams) (*anthropic.Message, error) {
+			return claude.Messages.New(ctx, p)
+		},
+	}
+	if s.dispatcher != nil {
+		s.assistant.Calendar = s.dispatcher.Calendar
+	}
+	s.refreshConfig(ctx)
 
 	switch once {
 	case "":
@@ -239,9 +263,25 @@ func newDispatcher(ctx context.Context, cfg config.Config, env envConfig, gm *ma
 type server struct {
 	log        *slog.Logger
 	topic      string
+	store      *store.Firestore
+	base       config.Config // config.yaml の設定（チャットでの上書きを重ねる前）
 	syncer     *ingest.Syncer
 	triager    *triage.Triager
+	tracker    *selection.Tracker
 	dispatcher *dispatch.Dispatcher
+	assistant  *assistant.Assistant
+
+	// work は取り込み・判定・通知を1つずつ実行するためのロック。
+	// 設定の差し替えと処理が同時に走らないようにし、同じメールを二重に判定・通知するのも防ぐ。
+	work sync.Mutex
+}
+
+// locked は s.work を持ち、最新の設定を配ってから f を実行する。
+func (s *server) locked(ctx context.Context, f func()) {
+	s.work.Lock()
+	defer s.work.Unlock()
+	s.refreshConfig(ctx)
+	f()
 }
 
 func (s *server) routes() http.Handler {
@@ -252,6 +292,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /pubsub/gmail", s.handleGmailPush)
 	mux.HandleFunc("POST /jobs/renew-watch", s.handleRenewWatch)
 	mux.HandleFunc("POST /jobs/tick", s.handleTick)
+	mux.HandleFunc("POST /jobs/chat", s.handleChat)
 	return mux
 }
 
@@ -282,24 +323,31 @@ func (s *server) handleGmailPush(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("Gmail の新着通知", "pubsubMessageId", env.Message.MessageID, "historyId", n.HistoryID)
 
 	// 通知の historyId は使わず、保存済みの位置から同期する（取りこぼしを防ぐため）。
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-	if err := s.sync(ctx); err != nil {
+	failed := false
+	s.locked(r.Context(), func() {
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		if err := s.sync(ctx); err != nil {
+			failed = true
+			return
+		}
+		// 判定の失敗は取り込みの再送では直らないので 204 を返す。判定し残しは次の通知か毎日のジョブで拾う。
+		tctx, tcancel := context.WithTimeout(r.Context(), 35*time.Second)
+		defer tcancel()
+		s.triageBatch(tctx)
+		// 即時通知は判定の直後に送る。失敗しても次の tick で再送する。
+		if s.dispatcher != nil {
+			dctx, dcancel := context.WithTimeout(r.Context(), 8*time.Second)
+			defer dcancel()
+			if _, err := s.dispatcher.SendUrgent(dctx); err != nil {
+				s.log.Error("即時通知に失敗（次の tick で再送）", "err", err)
+			}
+		}
+	})
+	if failed {
 		// 500 を返すと Pub/Sub が時間をおいて再送する。
 		http.Error(w, "sync failed", http.StatusInternalServerError)
 		return
-	}
-	// 判定の失敗は取り込みの再送では直らないので 204 を返す。判定し残しは次の通知か毎日のジョブで拾う。
-	tctx, tcancel := context.WithTimeout(r.Context(), 35*time.Second)
-	defer tcancel()
-	s.triageBatch(tctx)
-	// 即時通知は判定の直後に送る。失敗しても次の tick で再送する。
-	if s.dispatcher != nil {
-		dctx, dcancel := context.WithTimeout(r.Context(), 8*time.Second)
-		defer dcancel()
-		if _, err := s.dispatcher.SendUrgent(dctx); err != nil {
-			s.log.Error("即時通知に失敗（次の tick で再送）", "err", err)
-		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -309,25 +357,33 @@ func (s *server) handleTick(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
-	defer cancel()
-	if err := s.dispatcher.Tick(ctx); err != nil {
-		// 失敗した処理は次の tick でやり直すので、Scheduler には成功を返して再試行の連打を防ぐ。
-		s.log.Error("通知の処理に失敗", "err", err)
-	}
+	s.locked(r.Context(), func() {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		defer cancel()
+		if err := s.dispatcher.Tick(ctx); err != nil {
+			// 失敗した処理は次の tick でやり直すので、Scheduler には成功を返して再試行の連打を防ぐ。
+			s.log.Error("通知の処理に失敗", "err", err)
+		}
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleRenewWatch(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	if err := s.renewWatch(ctx); err != nil {
+	var err error
+	s.locked(r.Context(), func() {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		if err = s.renewWatch(ctx); err != nil {
+			return
+		}
+		tctx, tcancel := context.WithTimeout(r.Context(), 4*time.Minute)
+		defer tcancel()
+		s.triageBatch(tctx)
+	})
+	if err != nil {
 		http.Error(w, "renew failed", http.StatusInternalServerError)
 		return
 	}
-	tctx, tcancel := context.WithTimeout(r.Context(), 4*time.Minute)
-	defer tcancel()
-	s.triageBatch(tctx)
 	w.WriteHeader(http.StatusNoContent)
 }
 

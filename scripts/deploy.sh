@@ -12,6 +12,8 @@ REGION="${REGION:-asia-northeast1}"
 SERVICE="${SERVICE:-sheepbutler}"
 TOPIC="${TOPIC:-gmail-push}"
 SUBSCRIPTION="${SUBSCRIPTION:-gmail-push-sub}"
+CHAT_TOPIC="${CHAT_TOPIC:-chat-jobs}"
+CHAT_SUBSCRIPTION="${CHAT_SUBSCRIPTION:-chat-jobs-sub}"
 JOB="${JOB:-renew-gmail-watch}"
 TICK_JOB="${TICK_JOB:-sheepbutler-tick}"
 RUN_SA="sheepbutler-run@$PROJECT_ID.iam.gserviceaccount.com"
@@ -85,6 +87,26 @@ if gcloud pubsub subscriptions describe "$SUBSCRIPTION" >/dev/null 2>&1; then
   gcloud pubsub subscriptions update "$SUBSCRIPTION" "${PUSH_ARGS[@]}" >/dev/null
 else
   gcloud pubsub subscriptions create "$SUBSCRIPTION" --topic="$TOPIC" "${PUSH_ARGS[@]}" >/dev/null
+fi
+
+echo "== /ask の質問を本体に渡す Pub/Sub（チャット → 本体の /jobs/chat）"
+if ! gcloud pubsub topics describe "$CHAT_TOPIC" >/dev/null 2>&1; then
+  gcloud pubsub topics create "$CHAT_TOPIC" >/dev/null
+fi
+# Discord の応答の書き換えは15分しかできないので、古い質問は再送せずに捨てる。
+CHAT_PUSH_ARGS=(
+  --push-endpoint="$URL/jobs/chat"
+  --push-auth-service-account="$INVOKER_SA"
+  --push-auth-token-audience="$URL"
+  --ack-deadline=120
+  --message-retention-duration=10m
+  --min-retry-delay=10s
+  --max-retry-delay=60s
+)
+if gcloud pubsub subscriptions describe "$CHAT_SUBSCRIPTION" >/dev/null 2>&1; then
+  gcloud pubsub subscriptions update "$CHAT_SUBSCRIPTION" "${CHAT_PUSH_ARGS[@]}" >/dev/null
+else
+  gcloud pubsub subscriptions create "$CHAT_SUBSCRIPTION" --topic="$CHAT_TOPIC" --expiration-period=never "${CHAT_PUSH_ARGS[@]}" >/dev/null
 fi
 
 echo "== watch を毎日張り直すジョブ（毎日 4:00 JST）"
