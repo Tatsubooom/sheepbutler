@@ -73,22 +73,20 @@ func deadlineOf(m *model.Message) (time.Time, bool) {
 
 const phishingWarning = "⚠️ 詐欺の疑いがあります。メール内のリンクや添付ファイルは開かないでください。"
 
-// formatUrgent は即時通知の本文を作る。
+// formatUrgent は即時通知の本文を作る。読みやすさのため、見出し・差出人と締切・選考の動き・リンクだけにする。
 func formatUrgent(m *model.Message, now time.Time, loc *time.Location, link string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "🔴 即時｜%s\n", title(m))
+	fmt.Fprintf(&b, "🔴 %s\n", title(m))
 	if isPhishing(m) {
 		b.WriteString(phishingWarning + "\n")
 	}
-	fmt.Fprintf(&b, "差出人: %s（%s）\n", sender(m), m.Source)
+	meta := sender(m)
 	if dl, ok := deadlineOf(m); ok && dl.After(now) {
-		fmt.Fprintf(&b, "締切: %s（%s）\n", clock(dl, loc), remaining(dl.Sub(now)))
+		meta += fmt.Sprintf("｜締切 %s（%s）", clock(dl, loc), remaining(dl.Sub(now)))
 	}
+	b.WriteString(meta + "\n")
 	if m.SelectionChange != "" {
 		fmt.Fprintf(&b, "選考: %s\n", m.SelectionChange)
-	}
-	if m.Triage != nil && len(m.Triage.Reasons) > 0 {
-		fmt.Fprintf(&b, "理由: %s\n", strings.Join(m.Triage.Reasons, "・"))
 	}
 	if link != "" {
 		b.WriteString(link)
@@ -167,12 +165,23 @@ func formatDigest(in digestInput, now time.Time, loc *time.Location) string {
 
 	writeSelection(&b, in.Selection, now, loc)
 
-	if len(in.Items) > 0 {
-		sort.SliceStable(in.Items, func(i, j int) bool { return score(in.Items[i]) > score(in.Items[j]) })
-		fmt.Fprintf(&b, "\n📬 確認してほしいメール（%d通）\n", len(in.Items))
-		for i, m := range in.Items {
+	// 近い締切の欄に載せたメールは、確認してほしいメールの欄には重ねて載せない。
+	shown := map[string]bool{}
+	for _, m := range in.Deadlines {
+		shown[m.ID] = true
+	}
+	var items []*model.Message
+	for _, m := range in.Items {
+		if m.ID == "" || !shown[m.ID] {
+			items = append(items, m)
+		}
+	}
+	if len(items) > 0 {
+		sort.SliceStable(items, func(i, j int) bool { return score(items[i]) > score(items[j]) })
+		fmt.Fprintf(&b, "\n📬 確認してほしいメール（%d通）\n", len(items))
+		for i, m := range items {
 			if i == in.MaxItems {
-				fmt.Fprintf(&b, "…ほか %d 通\n", len(in.Items)-in.MaxItems)
+				fmt.Fprintf(&b, "…ほか %d 通\n", len(items)-in.MaxItems)
 				break
 			}
 			mark := "•"
@@ -182,13 +191,9 @@ func formatDigest(in digestInput, now time.Time, loc *time.Location) string {
 			if isPhishing(m) {
 				mark = "⚠️"
 			}
-			line := fmt.Sprintf("%s %s（%s）", mark, title(m), sender(m))
-			if m.Triage != nil && len(m.Triage.Reasons) > 0 {
-				line += " — " + strings.Join(m.Triage.Reasons, "・")
-			}
-			b.WriteString(line + "\n")
+			fmt.Fprintf(&b, "%s %s（%s）\n", mark, title(m), sender(m))
 		}
-	} else {
+	} else if len(in.Deadlines) == 0 {
 		b.WriteString("\n📬 確認してほしいメールはありません\n")
 	}
 

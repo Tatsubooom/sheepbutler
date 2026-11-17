@@ -1,6 +1,6 @@
 // review は判定済みのメールを一覧表示し、重みやしきい値の調整を手伝う。
 //
-//	go run ./cmd/review                 判定結果の一覧（新しい順）
+//	go run ./cmd/review [-days 14]      直近の判定結果の一覧（新しい順）
 //	go run ./cmd/review -rescore        今の config.yaml で点数を計算し直し、変わったものを表示
 //	                                    （保存済みの抽出結果を使うので LLM は呼ばない＝費用ゼロ）
 //	go run ./cmd/review -rescore -apply 計算し直した結果を Firestore に保存する
@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -30,6 +31,7 @@ func main() {
 	limit := flag.Int("limit", 100, "表示する件数")
 	rescore := flag.Bool("rescore", false, "今の config.yaml で点数を計算し直す")
 	apply := flag.Bool("apply", false, "-rescore の結果を保存する")
+	days := flag.Int("days", 14, "直近何日に受信したメールを対象にするか")
 	retriage := flag.Bool("retriage", false, "判定済みのメールを未判定に戻す（LLM への指示を変えたときに使う）")
 	flag.Parse()
 
@@ -56,10 +58,18 @@ func main() {
 	}
 	defer fs.Close()
 
-	msgs, err := fs.ListTriaged(ctx, 1000)
+	// 直近 days 日に受信した判定済みのメール（新しい順）。
+	all, err := fs.ListReceivedSince(ctx, time.Now().AddDate(0, 0, -*days))
 	if err != nil {
 		log.Fatal(err)
 	}
+	var msgs []*model.Message
+	for _, m := range all {
+		if m.Status == model.StatusTriaged {
+			msgs = append(msgs, m)
+		}
+	}
+	sort.Slice(msgs, func(i, j int) bool { return msgs[i].ReceivedAt.After(msgs[j].ReceivedAt) })
 	if len(msgs) > *limit {
 		msgs = msgs[:*limit]
 	}

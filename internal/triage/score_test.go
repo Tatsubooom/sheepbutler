@@ -38,7 +38,7 @@ func TestScoreTiers(t *testing.T) {
 		{
 			"志望度Sの説明会で締切が明日 → 即時",
 			Mail{Subject: "説明会のご案内"},
-			&llm.Extraction{MailKind: llm.KindEvent, Company: "第一志望", Deadline: deadlineIn(20 * time.Hour), Importance: 0.6},
+			&llm.Extraction{MailKind: llm.KindEvent, Company: "第一志望", Deadline: deadlineIn(20 * time.Hour), Importance: 0.6, ActionRequired: true},
 			model.TierUrgent,
 		},
 		{
@@ -56,8 +56,32 @@ func TestScoreTiers(t *testing.T) {
 		{
 			"選考の個別連絡は点数に関係なく即時",
 			Mail{Subject: "面接日程のご連絡"},
-			&llm.Extraction{MailKind: llm.KindSelection, Company: "知らない会社", Importance: 0.2},
+			&llm.Extraction{MailKind: llm.KindSelection, Company: "知らない会社", Importance: 0.2, SelectionEvent: llm.EventInterviewScheduling},
 			model.TierUrgent,
+		},
+		{
+			"選考の連絡でも対応不要で選考の動きが無ければまとめ（受付完了・アンケートなど）",
+			Mail{Subject: "ご回答ありがとうございました"},
+			&llm.Extraction{MailKind: llm.KindSelection, Company: "知らない会社", Importance: 0.8},
+			model.TierDigest,
+		},
+		{
+			"締切が近くても対応不要ならまとめ（開催直前の案内など）",
+			Mail{Subject: "本日開催！参加特典あり"},
+			&llm.Extraction{MailKind: llm.KindEvent, Deadline: deadlineIn(3 * time.Hour), Importance: 0.7, InterestEstimate: 0.9},
+			model.TierDigest,
+		},
+		{
+			"一斉配信は締切が近く点数が高くても即時にしない",
+			Mail{Subject: "【残り1日】スカウトの回答期限"},
+			&llm.Extraction{MailKind: llm.KindBulk, Deadline: deadlineIn(10 * time.Hour), Importance: 0.6, InterestEstimate: 0.9, ActionRequired: true},
+			model.TierDigest,
+		},
+		{
+			"一斉配信は bulk_digest 未満なら記録のみ",
+			Mail{Subject: "【希望条件にマッチ！？】スカウトが届きました"},
+			&llm.Extraction{MailKind: llm.KindBulk, Deadline: deadlineIn(12 * 24 * time.Hour), Importance: 0.6, InterestEstimate: 0.8},
+			model.TierRecord,
 		},
 		{
 			"興味なしの企業は選考連絡でも記録のみ",
@@ -74,7 +98,7 @@ func TestScoreTiers(t *testing.T) {
 		{
 			"詐欺の疑いでも選考連絡は即時のまま（段階を下げない）",
 			Mail{Subject: "面接日程"},
-			&llm.Extraction{MailKind: llm.KindSelection, PhishingSuspect: true},
+			&llm.Extraction{MailKind: llm.KindSelection, PhishingSuspect: true, ActionRequired: true},
 			model.TierUrgent,
 		},
 	}

@@ -95,13 +95,36 @@ func Score(cfg config.Config, m Mail, ex *llm.Extraction, now time.Time) model.T
 
 	// 強制ルール（点数より優先）
 	if ex != nil {
+		// 対応が要るか、選考が動いた（日程調整・結果など）か。どちらでもなければ即時にはしない。
+		needsAttention := !t.UrgentNeedsAction || ex.ActionRequired
 		switch {
 		case known && company.Interest == "none":
 			tier = model.TierRecord
 			reasons = append(reasons, "興味なしの企業")
 		case ex.MailKind == llm.KindSelection:
-			tier = model.TierUrgent
+			// 受付完了の連絡は選考が動いたとは見なさない（日程調整・結果・書類の依頼などだけ）。
+			moved := ex.SelectionEvent != llm.EventNone && ex.SelectionEvent != llm.EventEntryConfirmed
+			if needsAttention || moved {
+				tier = model.TierUrgent
+			} else {
+				tier = model.TierDigest // 受付完了・アンケートなど
+			}
 			reasons = append([]string{"選考の個別連絡"}, reasons...)
+		case ex.MailKind == llm.KindBulk:
+			// 一斉配信は即時にせず、点数が高いものだけまとめ報告に載せる。
+			tier = model.TierRecord
+			if score >= t.Thresholds.BulkDigest {
+				tier = model.TierDigest
+			}
+		case tier == model.TierUrgent && !needsAttention:
+			tier = model.TierDigest
+			reasons = append(reasons, "対応不要")
+		case tier == model.TierUrgent && t.UrgentNeedsAction && ex.MailKind == llm.KindEvent && !known:
+			// 説明会・イベントの案内は、志望企業として登録した会社のものだけ即時にする（他はまとめ報告で十分）。
+			tier = model.TierDigest
+		case ex.ActionRequired && (ex.MailKind == llm.KindUniversity || ex.MailKind == llm.KindOther):
+			// 大学の手続きなど、対応が要る個別の連絡は点数が低くても記録のみにはしない。
+			tier = maxTier(tier, model.TierDigest)
 		}
 		// 詐欺の疑いは警告として必ず目に入る段階にする。ただし他のルールで決まった段階より下げはしない
 		// （選考連絡が誤って詐欺扱いされても埋もれないように）。

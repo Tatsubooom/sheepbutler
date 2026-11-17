@@ -64,8 +64,11 @@ type Triage struct {
 	BulkDiscount float64 `yaml:"bulk_discount"`
 	// PhishingTier は詐欺の疑いがあるメールの最低の段階（urgent / digest / record）。
 	// LLM の詐欺判定は誤検知があるため、初期値は digest（警告付きでまとめ報告）。
-	PhishingTier string  `yaml:"phishing_tier"`
-	Exclude      Exclude `yaml:"exclude"`
+	PhishingTier string `yaml:"phishing_tier"`
+	// UrgentNeedsAction が true なら、返信・申込などの対応が要らないメールは点数が高くても即時にしない（まとめ報告に回す）。
+	// 選考の個別連絡も、対応が要らず選考の動きも無い（受付完了・アンケートなど）ならまとめ報告に回す。
+	UrgentNeedsAction bool    `yaml:"urgent_needs_action"`
+	Exclude           Exclude `yaml:"exclude"`
 }
 
 type Weights struct {
@@ -77,6 +80,8 @@ type Weights struct {
 type Thresholds struct {
 	Urgent float64 `yaml:"urgent"`
 	Digest float64 `yaml:"digest"`
+	// BulkDigest は一斉配信（広告・スカウトの一斉送信など）をまとめ報告に載せるしきい値。一斉配信は即時にはしない。
+	BulkDigest float64 `yaml:"bulk_digest"`
 }
 
 type DeadlineStep struct {
@@ -122,7 +127,7 @@ func Default() Config {
 	return Config{
 		Triage: Triage{
 			Weights:    Weights{Deadline: 0.4, Importance: 0.25, Interest: 0.35},
-			Thresholds: Thresholds{Urgent: 0.7, Digest: 0.3},
+			Thresholds: Thresholds{Urgent: 0.7, Digest: 0.4, BulkDigest: 0.5},
 			DeadlineSteps: []DeadlineStep{
 				{WithinHours: 24, Score: 1.0},
 				{WithinHours: 72, Score: 0.7},
@@ -133,6 +138,7 @@ func Default() Config {
 			MarkerScore:       0.7,
 			BulkDiscount:      0.5,
 			PhishingTier:      "digest",
+			UrgentNeedsAction: true,
 		},
 		LLM: LLM{Model: "claude-haiku-4-5", MaxInputChars: 1500, DailyBudgetUSD: 0.5},
 		Notify: Notify{
@@ -176,6 +182,9 @@ func (c Config) Validate() error {
 	t := c.Triage.Thresholds
 	if t.Digest < 0 || t.Urgent <= t.Digest {
 		errs = append(errs, fmt.Errorf("triage.thresholds は 0 <= digest < urgent にしてください（digest=%v, urgent=%v）", t.Digest, t.Urgent))
+	}
+	if t.BulkDigest < t.Digest || t.BulkDigest > 1 {
+		errs = append(errs, fmt.Errorf("triage.thresholds.bulk_digest は digest 以上 1 以下にしてください（%v）", t.BulkDigest))
 	}
 	for i := 1; i < len(c.Triage.DeadlineSteps); i++ {
 		if c.Triage.DeadlineSteps[i].WithinHours <= c.Triage.DeadlineSteps[i-1].WithinHours {
