@@ -12,6 +12,7 @@ import (
 // ここに無い項目（志望企業・LLM のモデルなど）は config.yaml でしか変えられない。
 var Overridable = map[string]string{
 	"digest.times":                  "時刻の一覧（例: [\"07:00\", \"21:00\"]）",
+	"digest.upcoming_days":          "整数（日。まとめ報告に載せる、この先の予定の日数。0〜14）",
 	"notify.quiet_hours":            "[開始, 終了] の時刻（例: [\"00:00\", \"07:00\"]、無効にするなら []）",
 	"notify.max_urgent_per_hour":    "整数",
 	"notify.max_urgent_per_day":     "整数",

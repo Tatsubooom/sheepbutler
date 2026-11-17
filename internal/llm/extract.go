@@ -65,6 +65,36 @@ func (e Extraction) DeadlineTime() (time.Time, bool) {
 	return t, err == nil
 }
 
+// deadlineLayouts は LLM がよく返す、RFC 3339 から少し外れた締切の書き方（秒やタイムゾーンの省略）。
+var deadlineLayouts = []string{"2006-01-02T15:04Z07:00", "2006-01-02T15:04:05", "2006-01-02T15:04", "2006-01-02"}
+
+// jst は締切にタイムゾーンが無いときに使う（メールは日本の就活・大学のものを想定）。
+var jst = time.FixedZone("JST", 9*3600)
+
+// Normalize は LLM の小さな書式の揺れを直す（再試行の費用を減らすため）。直せないものは Validate で弾く。
+//   - 秒やタイムゾーンを省いた締切を RFC 3339 に直す（タイムゾーンが無ければ日本時間、日付だけなら 23:59）
+//   - mail_kind に selection_event と書いたものを selection にする
+func (e *Extraction) Normalize() {
+	if e.MailKind == "selection_event" {
+		e.MailKind = KindSelection
+	}
+	if e.Deadline == "" {
+		return
+	}
+	if _, err := time.Parse(time.RFC3339, e.Deadline); err == nil {
+		return
+	}
+	for _, layout := range deadlineLayouts {
+		if t, err := time.ParseInLocation(layout, e.Deadline, jst); err == nil {
+			if layout == "2006-01-02" {
+				t = t.Add(23*time.Hour + 59*time.Minute)
+			}
+			e.Deadline = t.Format(time.RFC3339)
+			return
+		}
+	}
+}
+
 var validKinds = map[MailKind]bool{KindSelection: true, KindEvent: true, KindBulk: true, KindUniversity: true, KindOther: true}
 
 var validEvents = map[SelectionEvent]bool{
@@ -177,6 +207,7 @@ func (c *Claude) Extract(ctx context.Context, in Input) (Extraction, Usage, erro
 	if err := json.Unmarshal([]byte(jsonObject(text.String())), &ex); err != nil {
 		return Extraction{}, u, fmt.Errorf("JSON を解釈できません: %w", err)
 	}
+	ex.Normalize()
 	if err := ex.Validate(); err != nil {
 		return Extraction{}, u, err
 	}

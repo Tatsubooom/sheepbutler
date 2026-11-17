@@ -112,6 +112,8 @@ type digestInput struct {
 	EventsDay     time.Time // 予定を載せる日
 	Events        []calendar.Event
 	EventsErr     error
+	Upcoming      []calendar.Event // EventsDay の翌日から UpcomingTo の前日までの予定
+	UpcomingTo    time.Time
 	Deadlines     []*model.Message // 締切が近いメール
 	Items         []*model.Message // まとめ待ちのメール
 	RecordedCount int              // 記録のみにしたメールの件数
@@ -153,6 +155,8 @@ func formatDigest(in digestInput, now time.Time, loc *time.Location) string {
 			b.WriteString(line + "\n")
 		}
 	}
+
+	writeUpcoming(&b, in, loc)
 
 	if len(in.Deadlines) > 0 {
 		b.WriteString("\n⏰ 近い締切\n")
@@ -201,6 +205,33 @@ func formatDigest(in digestInput, now time.Time, loc *time.Location) string {
 		fmt.Fprintf(&b, "\n🗂 記録のみ: %d通（広告や通知など）\n", in.RecordedCount)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// writeUpcoming はこの先の予定の欄を書く。予定が無ければ省く。
+func writeUpcoming(b *strings.Builder, in digestInput, loc *time.Location) {
+	if len(in.Upcoming) == 0 {
+		return
+	}
+	from := in.EventsDay.In(loc).AddDate(0, 0, 1)
+	last := in.UpcomingTo.In(loc).AddDate(0, 0, -1)
+	fmt.Fprintf(b, "\n🗓 この先の予定（%02d/%02d〜%02d/%02d）\n", from.Month(), from.Day(), last.Month(), last.Day())
+	for _, e := range in.Upcoming {
+		start := e.Start.In(loc)
+		if start.Before(from) {
+			start = from // 前の日から続く予定は、欄の最初の日に載せる
+		}
+		when := fmt.Sprintf("%02d/%02d(%s) ", start.Month(), start.Day(), weekdays[start.Weekday()])
+		if e.AllDay {
+			when += "終日"
+		} else {
+			when += start.Format("15:04")
+		}
+		line := fmt.Sprintf("• %s %s", when, oneLine(e.Summary, 40))
+		if e.Location != "" {
+			line += "（" + oneLine(e.Location, 20) + "）"
+		}
+		b.WriteString(line + "\n")
+	}
 }
 
 // writeSelection は選考状況の欄を書く。選考中・変化・要確認・連絡なしのどれも無ければ省く。

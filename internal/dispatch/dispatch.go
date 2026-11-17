@@ -291,6 +291,14 @@ func (d *Dispatcher) SendDigestIfDue(ctx context.Context) (bool, error) {
 		in.Events, in.EventsErr = d.Calendar.Events(ctx, in.EventsDay, in.EventsDay.AddDate(0, 0, 1))
 		if in.EventsErr != nil {
 			d.Log.Warn("予定を取得できません", "err", in.EventsErr)
+		} else if n := d.Config.Digest.UpcomingDays; n > 0 {
+			// その先の数日分の予定。取得に失敗しても報告は送る。
+			from := in.EventsDay.AddDate(0, 0, 1)
+			in.UpcomingTo = from.AddDate(0, 0, n)
+			if in.Upcoming, err = d.Calendar.Events(ctx, from, in.UpcomingTo); err != nil {
+				d.Log.Warn("この先の予定を取得できません", "err", err)
+				in.Upcoming = nil
+			}
 		}
 	}
 

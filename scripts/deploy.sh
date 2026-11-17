@@ -40,8 +40,8 @@ has_secret() { gcloud secrets versions describe latest --secret="$1" >/dev/null 
 
 # 通知先とカレンダー（秘密ではない値は環境変数で渡す）
 NOTIFY_CHANNEL=$(env_value NOTIFY_CHANNEL)
-ENV_ARG="GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GMAIL_PUBSUB_TOPIC=projects/$PROJECT_ID/topics/$TOPIC,RETENTION_DAYS=${RETENTION_DAYS:-90},MAIL_SOURCES=$MAIL_SOURCES,CONFIG_PATH=/config/config.yaml"
-ENV_ARG="$ENV_ARG,NOTIFY_CHANNEL=${NOTIFY_CHANNEL:-discord},DISCORD_CHANNEL_ID=$(env_value DISCORD_CHANNEL_ID),LINE_USER_ID=$(env_value LINE_USER_ID),GOOGLE_CALENDAR_ID=$(env_value GOOGLE_CALENDAR_ID)"
+ENV_ARG="GOOGLE_CLOUD_PROJECT=$PROJECT_ID|GMAIL_PUBSUB_TOPIC=projects/$PROJECT_ID/topics/$TOPIC|RETENTION_DAYS=${RETENTION_DAYS:-90}|MAIL_SOURCES=$MAIL_SOURCES|CONFIG_PATH=/config/config.yaml"
+ENV_ARG="$ENV_ARG|NOTIFY_CHANNEL=${NOTIFY_CHANNEL:-discord}|DISCORD_CHANNEL_ID=$(env_value DISCORD_CHANNEL_ID)|LINE_USER_ID=$(env_value LINE_USER_ID)|GOOGLE_CALENDAR_ID=$(env_value GOOGLE_CALENDAR_ID)"
 
 # 秘密情報。config.yaml（app-config）は登録されていればファイルとしてマウントし、無ければ初期設定で動かす。
 SECRETS_ARG="GOOGLE_OAUTH_CLIENT_JSON=google-oauth-client:latest,GOOGLE_OAUTH_TOKEN_JSON=google-oauth-token:latest,ANTHROPIC_API_KEY=anthropic-api-key:latest"
@@ -62,7 +62,7 @@ MSYS2_ARG_CONV_EXCL="--set-env-vars=;--set-secrets=" gcloud run deploy "$SERVICE
   --no-allow-unauthenticated \
   --max-instances 1 \
   --memory 256Mi \
-  --set-env-vars="$ENV_ARG" \
+  --set-env-vars="^|^$ENV_ARG" \
   --set-secrets="$SECRETS_ARG" \
   --timeout 300 \
   --quiet

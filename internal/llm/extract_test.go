@@ -74,3 +74,21 @@ func TestJSONObject(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalize(t *testing.T) {
+	cases := map[string]string{
+		"2026-11-28T23:59+09:00": "2026-11-28T23:59:00+09:00",
+		"2026-11-16T23:59":       "2026-11-16T23:59:00+09:00",
+		"2026-11-16T10:00:00":    "2026-11-16T10:00:00+09:00",
+		"2026-11-16":             "2026-11-16T23:59:00+09:00",
+		"2026-11-16T10:00:00Z":   "2026-11-16T10:00:00Z",
+		"来週":                     "来週",
+	}
+	for in, want := range cases {
+		e := Extraction{Deadline: in, MailKind: "selection_event"}
+		e.Normalize()
+		if e.Deadline != want || e.MailKind != KindSelection {
+			t.Errorf("%q → %q %q, want %q", in, e.Deadline, e.MailKind, want)
+		}
+	}
+}

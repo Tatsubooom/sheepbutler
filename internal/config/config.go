@@ -37,6 +37,8 @@ type Digest struct {
 	Times []string `yaml:"times"`
 	// DeadlineDays は何日以内の締切を載せるか。
 	DeadlineDays int `yaml:"deadline_days"`
+	// UpcomingDays は、今日（夜の報告では明日）の予定に続けて、その先の何日分の予定を載せるか。0 なら載せない。
+	UpcomingDays int `yaml:"upcoming_days"`
 	// MaxItems はまとめ待ちのメールを何通まで載せるか（超えた分は件数だけ）。
 	MaxItems int `yaml:"max_items"`
 }
@@ -148,7 +150,7 @@ func Default() Config {
 			ReminderHours:    []int{72, 24},
 			LineMonthlyLimit: 200,
 		},
-		Digest:  Digest{Times: []string{"07:00", "21:00"}, DeadlineDays: 3, MaxItems: 10},
+		Digest:  Digest{Times: []string{"07:00", "21:00"}, DeadlineDays: 3, UpcomingDays: 3, MaxItems: 10},
 		JobHunt: JobHunt{StaleAfterDays: 10},
 	}
 }
@@ -224,6 +226,9 @@ func (c Config) Validate() error {
 		if h <= 0 {
 			errs = append(errs, errors.New("notify.reminder_hours は正の時間で指定してください"))
 		}
+	}
+	if c.Digest.UpcomingDays < 0 || c.Digest.UpcomingDays > 14 {
+		errs = append(errs, errors.New("digest.upcoming_days は 0〜14 にしてください"))
 	}
 	if c.Digest.DeadlineDays < 0 || c.Digest.MaxItems <= 0 {
 		errs = append(errs, errors.New("digest.deadline_days は 0 以上、max_items は 1 以上にしてください"))

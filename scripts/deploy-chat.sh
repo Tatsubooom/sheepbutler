@@ -50,8 +50,8 @@ for pair in "GOOGLE_OAUTH_CLIENT_JSON=google-oauth-client" "GOOGLE_OAUTH_TOKEN_J
     SECRETS_ARG="${SECRETS_ARG:+$SECRETS_ARG,}$pair:latest"
   fi
 done
-ENV_ARG="GOOGLE_CLOUD_PROJECT=$PROJECT_ID,DISCORD_PUBLIC_KEY=$PUBLIC_KEY,DISCORD_OWNER_ID=$OWNER_ID,GOOGLE_CALENDAR_ID=$(env_value GOOGLE_CALENDAR_ID),CHAT_JOBS_TOPIC=projects/$PROJECT_ID/topics/$CHAT_TOPIC"
-case "$SECRETS_ARG" in *app-config*) ENV_ARG="$ENV_ARG,CONFIG_PATH=/config/config.yaml" ;; esac
+ENV_ARG="GOOGLE_CLOUD_PROJECT=$PROJECT_ID|DISCORD_PUBLIC_KEY=$PUBLIC_KEY|DISCORD_OWNER_ID=$OWNER_ID|GOOGLE_CALENDAR_ID=$(env_value GOOGLE_CALENDAR_ID)|CHAT_JOBS_TOPIC=projects/$PROJECT_ID/topics/$CHAT_TOPIC"
+case "$SECRETS_ARG" in *app-config*) ENV_ARG="$ENV_ARG|CONFIG_PATH=/config/config.yaml" ;; esac
 
 echo "== チャットを Cloud Run にデプロイ（本体と同じイメージを使う、公開）"
 IMAGE=$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')
@@ -64,7 +64,7 @@ MSYS2_ARG_CONV_EXCL="--command=;--set-env-vars=;--set-secrets=" gcloud run deplo
   --allow-unauthenticated \
   --max-instances 1 \
   --memory 128Mi \
-  --set-env-vars="$ENV_ARG" \
+  --set-env-vars="^|^$ENV_ARG" \
   ${SECRETS_ARG:+--set-secrets="$SECRETS_ARG"} \
   --quiet >/dev/null
 CHAT_URL=$(gcloud run services describe "$CHAT_SERVICE" --region "$REGION" --format='value(status.url)')
