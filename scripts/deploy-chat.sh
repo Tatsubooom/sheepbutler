@@ -40,7 +40,7 @@ fi
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$CHAT_SA" \
   --role=roles/datastore.user --condition=None >/dev/null
 # /ask の質問を本体に渡すトピックへの発行だけを許す（トピックは scripts/deploy.sh が作る）。
-gcloud pubsub topics add-iam-policy-binding "$CHAT_TOPIC" --member="serviceAccount:$CHAT_SA" \n  --role=roles/pubsub.publisher >/dev/null
+gcloud pubsub topics add-iam-policy-binding "$CHAT_TOPIC" --member="serviceAccount:$CHAT_SA" --role=roles/pubsub.publisher >/dev/null
 SECRETS_ARG=""
 for pair in "GOOGLE_OAUTH_CLIENT_JSON=google-oauth-client" "GOOGLE_OAUTH_TOKEN_JSON=google-oauth-token" "/config/config.yaml=app-config"; do
   secret="${pair#*=}"
