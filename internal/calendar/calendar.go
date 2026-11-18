@@ -3,7 +3,10 @@ package calendar
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	gcal "google.golang.org/api/calendar/v3"
@@ -20,23 +23,63 @@ type Event struct {
 
 type Google struct {
 	svc *gcal.Service
-	id  string
+	ids []string
 	loc *time.Location
 }
 
-// NewGoogle は calendarID のカレンダーを読むクライアントを返す。
-// メインアカウントのカレンダーを専用 Gmail に共有しておく必要がある。
-func NewGoogle(ctx context.Context, hc *http.Client, calendarID string, loc *time.Location) (*Google, error) {
+// NewGoogle はカレンダーを読むクライアントを返す。calendarIDs はカンマ区切りで複数指定できる
+// （例: メインの Gmail と大学のカレンダー）。各カレンダーを専用 Gmail に共有しておく必要がある。
+func NewGoogle(ctx context.Context, hc *http.Client, calendarIDs string, loc *time.Location) (*Google, error) {
+	var ids []string
+	for _, id := range strings.FieldsFunc(calendarIDs, func(r rune) bool { return r == ',' || r == ';' }) {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("カレンダーの ID が空です")
+	}
 	svc, err := gcal.NewService(ctx, option.WithHTTPClient(hc))
 	if err != nil {
 		return nil, err
 	}
-	return &Google{svc: svc, id: calendarID, loc: loc}, nil
+	return &Google{svc: svc, ids: ids, loc: loc}, nil
 }
 
-// Events は [from, to) に重なる予定を開始時刻の順に返す。
+// Events は [from, to) に重なる予定を、すべてのカレンダーからまとめて開始時刻の順に返す。
+// 同じ予定が複数のカレンダーにある（招待など）ときは1つにする。
+// 一部のカレンダーだけ読めないときは、読めた分を返す（すべて読めなければエラー）。
 func (g *Google) Events(ctx context.Context, from, to time.Time) ([]Event, error) {
-	res, err := g.svc.Events.List(g.id).
+	var out []Event
+	var firstErr error
+	ok := 0
+	seen := map[string]bool{}
+	for _, id := range g.ids {
+		evs, err := g.events(ctx, id, from, to)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		ok++
+		for _, e := range evs {
+			key := e.Summary + "|" + e.Start.UTC().Format(time.RFC3339)
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, e)
+			}
+		}
+	}
+	if ok == 0 {
+		return nil, firstErr
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
+	return out, nil
+}
+
+func (g *Google) events(ctx context.Context, id string, from, to time.Time) ([]Event, error) {
+	res, err := g.svc.Events.List(id).
 		TimeMin(from.Format(time.RFC3339)).
 		TimeMax(to.Format(time.RFC3339)).
 		SingleEvents(true).

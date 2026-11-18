@@ -116,8 +116,15 @@ func (f *fakeNotifier) Send(_ context.Context, text string) error {
 
 type fakeCalendar struct{ events []calendar.Event }
 
-func (f *fakeCalendar) Events(context.Context, time.Time, time.Time) ([]calendar.Event, error) {
-	return f.events, nil
+// Events は [from, to) に始まる予定を返す。
+func (f *fakeCalendar) Events(_ context.Context, from, to time.Time) ([]calendar.Event, error) {
+	var out []calendar.Event
+	for _, e := range f.events {
+		if !e.Start.Before(from) && e.Start.Before(to) {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 func at(day, hour, min int) time.Time { return time.Date(2026, 10, day, hour, min, 0, 0, jst) }
@@ -250,6 +257,8 @@ func TestSendDigest(t *testing.T) {
 	d.Calendar = &fakeCalendar{events: []calendar.Event{
 		{Summary: "情報理論", Start: at(5, 9, 0), End: at(5, 10, 30)},
 		{Summary: "学園祭", AllDay: true, Start: at(5, 0, 0)},
+		{Summary: "A社 一次面接", Location: "オンライン", Start: at(7, 13, 0), End: at(7, 14, 0)},
+		{Summary: "遠い予定", Start: at(9, 13, 0)}, // 3日分（10/06〜10/08）の外
 	}}
 
 	sent, err := d.SendDigestIfDue(context.Background())
@@ -258,10 +267,14 @@ func TestSendDigest(t *testing.T) {
 	}
 	body := n.sent[0]
 	for _, want := range []string{"🐑 まとめ報告（10/05 朝）", "今日の予定（10/05 月）", "09:00〜10:30 情報理論", "終日 学園祭",
+		"この先の予定（10/06〜10/08）", "• 10/07(水) 13:00 A社 一次面接（オンライン）",
 		"近い締切", "10/06(火) 23:59", "確認してほしいメール（2通）", "記録のみ: 1通"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("本文に %q が無い:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "遠い予定") || strings.Count(body, "情報理論") != 1 {
+		t.Errorf("この先の予定は翌日から3日分だけ:\n%s", body)
 	}
 	// 見送った即時通知が先頭、残りは点数の高い順
 	iu, ib, ia := strings.Index(body, "🔴"), strings.Index(body, "件名b"), strings.Index(body, "件名a")
